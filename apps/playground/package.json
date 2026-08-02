@@ -1,0 +1,21 @@
+{
+  "name": "@traceframe/playground",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "check": "tsc -p tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "4.7.0",
+    "@traceframe/core": "0.1.0",
+    "@traceframe/python": "0.1.0",
+    "@traceframe/react": "0.1.0",
+    "lucide-react": "1.28.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

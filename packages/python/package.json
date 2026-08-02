@@ -1,0 +1,27 @@
+{
+  "name": "@traceframe/python",
+  "version": "0.1.0",
+  "description": "Browser-isolated Pyodide execution and tracing adapter for Traceframe.",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "README.md", "LICENSE"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "vite build --config vite.config.ts && tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@traceframe/core": "0.1.0"
+  },
+  "engines": {"node": ">=20"},
+  "license": "MIT"
+}

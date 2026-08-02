@@ -1,0 +1,24 @@
+{
+  "name": "@traceframe/core",
+  "version": "0.1.0",
+  "description": "Renderer-neutral execution trace, projection, layout, and motion engine for Traceframe.",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "README.md", "LICENSE"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean --sourcemap && tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --pretty false"
+  },
+  "engines": {"node": ">=20"},
+  "license": "MIT"
+}

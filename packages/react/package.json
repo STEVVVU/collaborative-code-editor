@@ -1,0 +1,32 @@
+{
+  "name": "@traceframe/react",
+  "version": "0.1.0",
+  "description": "Interactive React renderer for Traceframe scenes.",
+  "type": "module",
+  "sideEffects": ["**/*.css"],
+  "files": ["dist", "README.md", "LICENSE"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/index.css"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean --sourcemap --external react --external react/jsx-runtime --external lucide-react --external @traceframe/core && tsc -p tsconfig.build.json && node ../../tools/copy-file.mjs src/styles.css dist/index.css",
+    "check": "tsc -p tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@traceframe/core": "0.1.0",
+    "lucide-react": "1.28.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "license": "MIT"
+}

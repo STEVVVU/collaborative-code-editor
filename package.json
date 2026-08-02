@@ -1,0 +1,39 @@
+{
+  "name": "traceframe-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run build:packages && npm run dev -w @traceframe/playground",
+    "build:packages": "npm run build -w @traceframe/core && npm run build -w @traceframe/react && npm run build -w @traceframe/python",
+    "build": "npm run build:packages && npm run build -w @traceframe/playground",
+    "preview": "npm run preview -w @traceframe/playground",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:update": "playwright test --update-snapshots",
+    "check": "npm run check -w @traceframe/core && npm run check -w @traceframe/react && npm run check -w @traceframe/python && npm run check -w @traceframe/playground",
+    "pack:check": "npm run build:packages && npm pack --dry-run -w @traceframe/core && npm pack --dry-run -w @traceframe/react && npm pack --dry-run -w @traceframe/python"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.62.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.5",
+    "jsdom": "30.0.1",
+    "tsup": "8.5.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.0",
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "dompurify": "3.4.12"
+  }
+}

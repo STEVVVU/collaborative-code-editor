@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "paths": {
+      "@traceframe/core": ["../../packages/core/src/index.ts"],
+      "@traceframe/python": ["../../packages/python/src/index.ts"],
+      "@traceframe/react": ["../../packages/react/src/index.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

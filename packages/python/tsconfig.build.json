@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "outDir": "dist",
+    "paths": {},
+    "rootDir": "src"
+  },
+  "include": [
+    "src/index.ts",
+    "src/pyodideDebuggerAdapter.ts",
+    "src/workerProtocol.ts"
+  ]
+}
