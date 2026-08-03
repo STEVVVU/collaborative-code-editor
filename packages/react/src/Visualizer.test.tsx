@@ -136,6 +136,41 @@ describe("Visualizer primitive operations", () => {
     );
   });
 
+  it("does not surface literal-only iterator setup as an equation", () => {
+    const scene = compileScene({
+      ...frame([
+        {
+          kind: "iteration",
+          source: { line: 2 },
+          expression: "for end in range(limit - 1, 0, -1)",
+          target: "end",
+          iteratorExpression: "range(limit - 1, 0, -1)",
+          iterationIndex: 0,
+          loopKind: "for",
+          result: scalar(4),
+        },
+        {
+          kind: "operation",
+          source: { line: 2 },
+          expression: "-1",
+          operator: "negate",
+          operatorToken: "-",
+          operationCategory: "arithmetic",
+          operandExpressions: ["1"],
+          operands: [scalar(1)],
+          result: scalar(-1),
+        },
+      ]),
+      locals: { end: scalar(4) },
+    });
+
+    const { container } = render(
+      <Visualizer scene={scene} loading={false} statusText="" />,
+    );
+
+    expect(container.querySelector(".operation-operation")).toBeNull();
+  });
+
   it("retains outgoing and incoming equations during the cross-fade", () => {
     vi.useFakeTimers();
     const first = compileScene(frame([{

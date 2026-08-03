@@ -1746,60 +1746,62 @@ function compileOperationMotion(
   locals: Record<string, SerializedValue>,
   returnTarget: boolean,
 ): OperationMotionPlan | undefined {
-  let operationIndex = -1;
   for (let index = events.length - 1; index >= 0; index -= 1) {
-    if (events[index].kind === "operation") {
-      operationIndex = index;
-      break;
+    const operation = events[index];
+    if (operation.kind !== "operation") {
+      continue;
     }
-  }
-  if (operationIndex < 0) {
-    return undefined;
-  }
-  const operation = events[operationIndex];
-  const operandTexts = operation.operands?.map(scalarText) ?? [];
-  const resultText = operation.result ? scalarText(operation.result) : "";
-  if (
-    !operation.operatorToken ||
-    operandTexts.length === 0 ||
-    operandTexts.some((text) => text.length === 0) ||
-    resultText.length === 0
-  ) {
-    return undefined;
-  }
+    const operandTexts = operation.operands?.map(scalarText) ?? [];
+    const resultText = operation.result ? scalarText(operation.result) : "";
+    if (
+      !operation.operatorToken ||
+      operandTexts.length === 0 ||
+      operandTexts.some((text) => text.length === 0) ||
+      resultText.length === 0
+    ) {
+      continue;
+    }
 
-  const sourcePaths = (operation.operandExpressions ?? []).map(
-    (expression) => resolveAccessPath(expression, locals) ?? null,
-  );
-  while (sourcePaths.length < operandTexts.length) {
-    sourcePaths.push(null);
-  }
+    const sourcePaths = (operation.operandExpressions ?? []).map(
+      (expression) => resolveAccessPath(expression, locals) ?? null,
+    );
+    while (sourcePaths.length < operandTexts.length) {
+      sourcePaths.push(null);
+    }
 
-  const write = events.slice(operationIndex + 1).find(
-    (event) =>
-      event.kind === "write" &&
-      event.source.line === operation.source.line &&
-      sameOperationResult(event.result, operation.result),
-  );
-  const targetPath = write?.target
-    ?.split(/[=,]/)
-    .map((target) => resolveAccessPath(target.trim(), locals))
-    .find((target): target is string => target !== undefined);
+    const write = events.slice(index + 1).find(
+      (event) =>
+        event.kind === "write" &&
+        event.source.line === operation.source.line &&
+        sameOperationResult(event.result, operation.result),
+    );
+    const targetPath = write?.target
+      ?.split(/[=,]/)
+      .map((target) => resolveAccessPath(target.trim(), locals))
+      .find((target): target is string => target !== undefined);
+    const resolvedTarget = targetPath ?? (returnTarget ? "$return" : undefined);
 
-  return {
-    id: [
-      operation.source.line,
-      operation.expression,
-      operation.operatorToken,
+    // A literal-only intermediate has no stable visual entity to teach from or to.
+    if (!resolvedTarget && sourcePaths.every((path) => path === null)) {
+      continue;
+    }
+
+    return {
+      id: [
+        operation.source.line,
+        operation.expression,
+        operation.operatorToken,
+        resultText,
+      ].join(":"),
+      expression: operation.expression,
+      operandTexts,
+      sourcePaths,
+      operatorToken: operation.operatorToken,
       resultText,
-    ].join(":"),
-    expression: operation.expression,
-    operandTexts,
-    sourcePaths,
-    operatorToken: operation.operatorToken,
-    resultText,
-    targetPath: targetPath ?? (returnTarget ? "$return" : undefined),
-  };
+      targetPath: resolvedTarget,
+    };
+  }
+  return undefined;
 }
 
 function operationCausalLinks(

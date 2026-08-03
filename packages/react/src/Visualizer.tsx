@@ -403,8 +403,24 @@ function VisualizerContent({
   );
   const visibleOperation = useMemo(
     () => {
-      const operations =
-        scene?.operations.filter((operation) => operation.kind !== "iteration") ?? [];
+      const hasIteration =
+        scene?.operations.some((operation) => operation.kind === "iteration") ?? false;
+      const operations = scene?.operations.filter((operation) => {
+        if (operation.kind === "iteration") {
+          return false;
+        }
+        if (operation.kind !== "operation") {
+          return true;
+        }
+        if (!hasIteration) {
+          return true;
+        }
+        return (
+          scene.operationMotion !== undefined &&
+          operation.expression === scene.operationMotion.expression &&
+          operation.operatorToken === scene.operationMotion.operatorToken
+        );
+      }) ?? [];
       const cacheHit = [...operations].reverse().find(
         (operation) => operation.kind === "memo" && operation.cacheHit,
       );
@@ -414,7 +430,10 @@ function VisualizerContent({
       const memoized = [...operations].reverse().find(
         (operation) => operation.kind === "memo",
       );
-      return cacheHit ?? completedPrimitive ?? memoized ?? operations.at(-1);
+      return cacheHit ??
+        completedPrimitive ??
+        memoized ??
+        (hasIteration ? undefined : operations.at(-1));
     },
     [scene],
   );
@@ -696,14 +715,16 @@ function VisualizerContent({
           </div>
         )}
 
-        {(visibleOperation || scene.changes.length > 0) && (
+        {(visibleOperation ||
+          scene.causalLinks.length > 0 ||
+          scene.changes.length > 0) && (
           <div className="change-strip">
             <span className="panel-kicker">
               {scene.operations.some((operation) => operation.kind === "iteration")
                 ? "ITERATION"
                 : "STEP"}
             </span>
-            {visibleOperation ? (
+            {(visibleOperation || scene.causalLinks.length > 0) ? (
             <div className="iteration-details">
               {scene.causalLinks.length > 0 && (
                 <div className="causal-list" aria-label="Data flow">
@@ -722,7 +743,9 @@ function VisualizerContent({
                   )}
                 </div>
               )}
-              <OperationEquationTransition operation={visibleOperation} />
+              {visibleOperation && (
+                <OperationEquationTransition operation={visibleOperation} />
+              )}
             </div>
             ) : (
               <div className="change-list">

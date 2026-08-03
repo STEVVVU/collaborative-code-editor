@@ -691,6 +691,46 @@ describe("compileScene", () => {
     });
   });
 
+  it("does not animate literal-only iterator setup operations", () => {
+    const scene = compileScene({
+      index: 4,
+      event: "line",
+      source: { line: 2 },
+      functionName: "bubble_sort",
+      scopeId: "sort:1",
+      depth: 0,
+      callStack: [],
+      locals: { end: scalar(4) },
+      stdout: "",
+      changes: [],
+      semanticEvents: [
+        {
+          kind: "iteration",
+          source: { line: 2 },
+          expression: "for end in range(len(nums) - 1, 0, -1)",
+          target: "end",
+          iteratorExpression: "range(len(nums) - 1, 0, -1)",
+          iterationIndex: 0,
+          loopKind: "for",
+          result: scalar(4),
+        },
+        {
+          kind: "operation",
+          source: { line: 2 },
+          expression: "-1",
+          operator: "negate",
+          operatorToken: "-",
+          operationCategory: "arithmetic",
+          operandExpressions: ["1"],
+          operands: [scalar(1)],
+          result: scalar(-1),
+        },
+      ],
+    });
+
+    expect(scene.operationMotion).toBeUndefined();
+  });
+
   it("attaches enumerate bindings to their sequence cells", () => {
     const frame: TraceFrame = {
       index: 6,
