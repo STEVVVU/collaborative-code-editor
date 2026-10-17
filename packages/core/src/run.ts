@@ -121,6 +121,12 @@ export function validateProjectionContracts(
         validateScalarValue(segment.key, `Projection contract '${declaration.id}' has an invalid map key segment`);
         return JSON.stringify(["mapKey", segment.key.type, segment.key.value]);
       }
+      if (segment.kind === "each") {
+        if (!hasOnlyKeys(segment, ["kind"])) {
+          throw new Error(`Projection contract '${declaration.id}' has an invalid each segment`);
+        }
+        return JSON.stringify(["each"]);
+      }
       throw new Error(`Projection contract '${declaration.id}' has an unknown target segment`);
     });
     if (

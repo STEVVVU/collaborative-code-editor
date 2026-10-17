@@ -9,7 +9,7 @@ import type {
   MutationFact,
   SemanticExecutionFact,
 } from "./executionModel";
-import { runtimeLocationId } from "./locations";
+import { locationForContainerAccess, runtimeLocationId, serializedIdentity } from "./locations";
 import type {
   RuntimeLocation,
   SemanticEvent,
@@ -236,6 +236,22 @@ const attentionLens: ExecutionLens<AttentionRequest[]> = {
             lensId: "structural",
           });
         });
+        if (event.kind === "read" && event.accessContainer &&
+            locationForContainerAccess(event.accessContainer, event.accessKey, fact.activationId, event.expression).kind === "expression") {
+          const identity = serializedIdentity(event.accessContainer);
+          if (identity) {
+            const location = { kind: "identity" as const, objectId: identity };
+            requests.push({
+              id: `attention:access-container:${eventId}:${runtimeLocationId(location)}`,
+              subject: { kind: "location", location },
+              reason: event.kind,
+              role: "mustShow",
+              lifetime: fact.active ? "scope" : "event",
+              priority: 95,
+              lensId: "structural",
+            });
+          }
+        }
       }
       if (fact.kind === "mutation") {
         requests.push({
@@ -255,6 +271,10 @@ const attentionLens: ExecutionLens<AttentionRequest[]> = {
   },
 };
 
+export function compileAttentionRequests(context: LensContext): AttentionRequest[] {
+  return attentionLens.compile(context);
+}
+
 export function compileExecutionLenses(
   context: LensContext,
 ): ExecutionLensBundle {
@@ -262,6 +282,6 @@ export function compileExecutionLenses(
     callFlow: callLens.compile(context),
     controlFlow: controlLens.compile(context),
     dataFlow: dataFlowLens.compile(context),
-    attention: attentionLens.compile(context),
+    attention: compileAttentionRequests(context),
   };
 }

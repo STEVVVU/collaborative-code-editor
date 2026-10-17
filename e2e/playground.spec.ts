@@ -1,10 +1,77 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
-async function waitForTrace(page: import("@playwright/test").Page) {
-  await page.goto("/");
+const editedNestedBfsSource = `class BatchMetadata:
+    pass
+
+def inspect_networks(state):
+    for batch in state['batches']:
+        batch['distances'] = {}
+        for name, graph in batch['graphs'].items():
+            distances = [-1] * len(graph)
+            queue = []
+            if graph:
+                distances[0] = 0
+                queue.append(0)
+            while queue:
+                node = queue.pop(0)
+                for neighbor in graph[node]:
+                    if distances[neighbor] == -1:
+                        distances[neighbor] = distances[node] + 1
+                        queue.append(neighbor)
+            batch['distances'][name] = distances
+    return state
+`;
+
+const editedNestedBfsArguments = JSON.stringify([{
+  batches: [
+    {
+      label: "connected",
+      graphs: {
+        chain: [[1], [0, 2], [1, 3], [2, 4], [3]],
+        cycle: [[1, 3], [0, 2], [1, 3], [0, 2]],
+      },
+    },
+    {
+      label: "mixed",
+      graphs: {
+        star: [[1, 2, 3, 4], [0], [0], [0], [0]],
+        disconnected: [[1], [0, 2], [1], [4], [3], []],
+      },
+    },
+  ],
+}]);
+
+async function setEditorSource(
+  page: import("@playwright/test").Page,
+  source: string,
+) {
+  await page.evaluate((value) => {
+    const editor = (
+      window as typeof window & {
+        monaco: {
+          editor: {
+            getModels(): Array<{ setValue(value: string): void }>;
+          };
+        };
+      }
+    ).monaco.editor;
+    editor.getModels()[0]?.setValue(value);
+  }, source);
+}
+
+async function waitForTrace(
+  page: import("@playwright/test").Page,
+  path = "/",
+) {
+  await page.goto(path);
   await expect(page.locator(".visual-scene")).toBeVisible({ timeout: 100_000 });
   await expect(page.getByLabel("Execution timeline")).toBeEnabled();
+}
+
+async function expandObjectRelationships(page: import("@playwright/test").Page) {
+  const expand = page.getByRole("button", { name: "Expand object relationships" });
+  if (await expand.count()) await expand.click();
 }
 
 interface CorpusCase {
@@ -40,7 +107,7 @@ const problemCorpus: CorpusCase[] = [
   { id: "cyclic-list", projection: ".relation-node", minimumCount: 2 },
   {
     id: "nested-structures",
-    projection: ".nested-projection-token",
+    projection: ".visual-scene .attention-context-card",
     minimumCount: 3,
   },
 ];
@@ -402,6 +469,406 @@ test("executes a representative algorithm and data-structure corpus", async ({
   }
 });
 
+test("composes nested graphs inline and retains recursive inspection", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop",
+    "Nested contract composition is covered once at desktop size.",
+  );
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await waitForTrace(page, "/?example=nested-graphs");
+  await expect(page.getByLabel("Example program"))
+    .toHaveValue("nested-graphs");
+  await expect(page.getByRole("button", { name: "Run code" })).toBeEnabled({
+    timeout: 30_000,
+  });
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+  const timeline = page.getByLabel("Execution timeline");
+  await timeline.fill(await timeline.getAttribute("max") ?? "0");
+  const context = page.getByLabel("Context values");
+  const working = page.getByLabel("Working state");
+  await expect(context.locator(".attention-preview-graph")).toHaveCount(4);
+  expect(await working.locator(".attention-working-card").filter({
+    has: page.locator(".graph-viewport"),
+  }).count()).toBeLessThanOrEqual(3);
+  expect(await page.locator(".visual-scene .graph-viewport").count()).toBeLessThanOrEqual(3);
+
+  await context.locator('.attention-context-card:has(.attention-card-heading strong[title="state"])')
+    .getByRole("button", { name: "Inspect state" }).click();
+  await expect(page.locator(".detail-view")).toBeVisible();
+  await expect(page.locator(".detail-content .graph-viewport")).toHaveCount(4);
+  await expect(page.locator(".detail-content .graph-node")).toHaveCount(13);
+  await expect(page.locator(".detail-content .grid-cell")).toHaveCount(4);
+  await page.locator(
+    '.detail-content .projection-shell[data-projection-path="state{1}.value"] .projection-shell-inspect',
+  ).click();
+  await expect(page.locator(".detail-content .grid-cell")).toHaveCount(4);
+  await page.getByRole("button", { name: "Back to parent value" }).click();
+  await page.locator(
+    '.detail-content .projection-shell.kind-object[data-projection-path="state{2}.value"] > header > .projection-shell-inspect',
+  ).click();
+  await expect(page.locator(".detail-content .object-fields .object-field"))
+    .toHaveCount(2);
+  await page.getByRole("button", { name: "Back to parent value" }).click();
+  await page.getByRole("button", { name: "Back to execution" }).click();
+
+  await context.locator('.attention-context-card:has(.attention-card-heading strong[title="state"])')
+    .getByRole("button", { name: "Inspect state" }).click();
+  const firstGraphShell = page.locator(".detail-content .projection-shell.kind-graph").first();
+  const graphPath = await firstGraphShell.getAttribute("data-projection-path");
+  const collapse = firstGraphShell.getByRole("button", { name: /^Collapse/ });
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await collapse.click();
+  await expect(firstGraphShell.getByRole("button", { name: /^Expand/ }))
+    .toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".detail-content .graph-viewport")).toHaveCount(3);
+  await firstGraphShell.getByRole("button", { name: /^Expand/ }).click();
+  await expect(page.locator(".detail-content .graph-viewport")).toHaveCount(4);
+  await expect(firstGraphShell).toHaveAttribute("data-projection-path", graphPath ?? "");
+  await firstGraphShell.getByRole("button", { name: /^Open details for/ }).click();
+  await expect(page.locator(".detail-view")).toBeVisible();
+  const renderedNodes = page.locator(".detail-content .graph-node");
+  await expect(renderedNodes).toHaveCount(2);
+  await expect(page.locator(".detail-content .graph-viewport"))
+    .toHaveCSS("opacity", "1");
+  await expect(page.locator(".scene-motion-ghost")).toHaveCount(0);
+  await expect(page.locator(".detail-view:visible .detail-toolbar .projection-kind"))
+    .toHaveClass(/kind-graph/);
+  await expect(page.locator(".detail-content .graph-viewport")).toBeVisible();
+  await expect(renderedNodes.first()).toBeVisible();
+  const renderedEdges = await page.locator(".detail-content .graph-edges line")
+    .evaluateAll((edges) => edges.map((edge) => {
+      const bounds = edge.getBoundingClientRect();
+      return { width: bounds.width, height: bounds.height };
+    }));
+  expect(renderedEdges.some(({ width, height }) => width > 0 || height > 0))
+    .toBe(true);
+  await expect(page.locator('.detail-content .graph-node[data-topology-phase="entering"]'))
+    .toHaveCount(0);
+  const viewportBounds = await page.locator(".detail-content .graph-viewport")
+    .evaluate((viewport) => {
+      const bounds = viewport.getBoundingClientRect();
+      return {
+        left: Math.round(bounds.left),
+        top: Math.round(bounds.top),
+        right: Math.round(bounds.right),
+        bottom: Math.round(bounds.bottom),
+      };
+    });
+  const nodeGeometry = await renderedNodes.evaluateAll((nodes) => nodes.map((node) => {
+    const bounds = node.getBoundingClientRect();
+    return {
+      label: node.textContent?.trim(),
+      x: Math.round(bounds.x),
+      y: Math.round(bounds.y),
+      right: Math.round(bounds.right),
+      bottom: Math.round(bounds.bottom),
+      opacity: Number(getComputedStyle(node).opacity),
+      frontmost: document.elementFromPoint(
+        bounds.left + bounds.width / 2,
+        bounds.top + bounds.height / 2,
+      )?.closest(".graph-node") === node,
+    };
+  }));
+  expect(nodeGeometry.map(({ label }) => label)).toEqual(["0", "1"]);
+  expect(nodeGeometry.every(({ frontmost }) => frontmost)).toBe(true);
+  expect(new Set(nodeGeometry.map(({ x, y }) => `${x}:${y}`)).size)
+    .toBe(nodeGeometry.length);
+  expect(nodeGeometry.every(({ opacity }) => opacity > 0.9)).toBe(true);
+  expect(nodeGeometry.every((node) =>
+    node.x >= viewportBounds.left && node.y >= viewportBounds.top &&
+    node.right <= viewportBounds.right && node.bottom <= viewportBounds.bottom
+  )).toBe(true);
+  await expect(page.locator(".detail-view:visible .detail-toolbar .projection-kind"))
+    .toHaveClass(/kind-graph/);
+  await expect(page.locator(".detail-breadcrumbs")).toBeVisible();
+  await expect(pageErrors).toEqual([]);
+  await page.screenshot({
+    path: testInfo.outputPath("nested-graphs-final-proof.png"),
+    animations: "disabled",
+    fullPage: false,
+  });
+});
+
+test("keeps explicit nested graph contracts when editing the example source", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop",
+    "Nested contract persistence is covered once at desktop size.",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await waitForTrace(page, "/?example=nested-graphs");
+  await expect(page.getByLabel("Example program")).toHaveValue("nested-graphs");
+
+  await setEditorSource(page, editedNestedBfsSource);
+  await page.getByLabel("Function entry point").fill("inspect_networks");
+  await page.getByLabel("Function arguments JSON").fill(editedNestedBfsArguments);
+  await expect(page.getByLabel("Example program")).toHaveValue("custom");
+  await page.getByRole("button", { name: "Run code" }).click();
+  await expect(page.getByRole("button", { name: "Run code" })).toBeEnabled({
+    timeout: 30_000,
+  });
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+  const timeline = page.getByLabel("Execution timeline");
+  await timeline.fill(await timeline.getAttribute("max") ?? "0");
+
+  const context = page.getByLabel("Context values");
+  const working = page.getByLabel("Working state");
+  await expect(context.locator(".attention-preview-graph")).toHaveCount(4);
+  expect(await working.locator(".attention-full-view .graph-viewport").count())
+    .toBeLessThanOrEqual(3);
+  await context.locator('.attention-context-card:has(.attention-card-heading strong[title="state"])')
+    .getByRole("button", { name: "Inspect state" }).click();
+  await expect(page.locator(".detail-content .graph-viewport")).toHaveCount(4);
+  await expect(page.locator(".detail-content .graph-node")).toHaveCount(20);
+  await page.getByRole("button", { name: "Back to execution" }).click();
+
+  await page.getByLabel("Example program").selectOption("nested-structures");
+  await page.getByRole("button", { name: "Run code" }).click();
+  await expect(page.getByRole("button", { name: "Run code" })).toBeEnabled({
+    timeout: 30_000,
+  });
+  await expect(page.getByLabel("Example program")).toHaveValue("nested-structures");
+  await expect(page.getByLabel("Context values").locator(".attention-preview-graph"))
+    .toHaveCount(0);
+});
+
+test("keeps nested BFS attention bounded and distinguishes graph reads from writes", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop",
+    "Nested BFS scene composition is covered once at desktop size.",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await waitForTrace(page, "/?example=nested-bfs");
+  await expect(page.getByLabel("Example program")).toHaveValue("nested-bfs");
+  const scene = page.locator(".visual-scene");
+  const context = page.getByLabel("Context values");
+  const working = page.getByLabel("Working state");
+  await expect(context).toBeVisible();
+  await expect(working).toBeVisible();
+  await expect(context.locator(".attention-preview-graph").first()).toBeVisible();
+
+  const timeline = page.getByLabel("Execution timeline");
+  const maximum = Number(await timeline.getAttribute("max"));
+  // The saved nested-BFS trace identifies step 51 as the observed graph[node] read
+  // and step 63 as the first distance-list update caused by that traversal.
+  const graphReadIndex = 51;
+  const changeIndex = 63;
+  expect(maximum).toBeGreaterThan(changeIndex);
+  await timeline.fill(String(graphReadIndex));
+  await expect(scene).toHaveAttribute("data-frame-index", String(graphReadIndex));
+  const readOnlyGraph = working.locator(
+    '.attention-working-card.activity-used:has(.attention-full-view .graph-viewport):not(:has(.attention-changed))',
+  ).first();
+  await expect(readOnlyGraph).toBeVisible();
+  const graphReadId = await readOnlyGraph.getAttribute("data-attention-id");
+  expect(graphReadId).toBeTruthy();
+  expect(await context.locator(".attention-preview-graph").count()).toBeGreaterThan(0);
+  expect(await working.locator(
+    '.attention-working-card[data-attention-level="full"]:not(:has(.attention-pinned))',
+  ).count()).toBeLessThanOrEqual(3);
+  await page.screenshot({ path: testInfo.outputPath("attention-nested-bfs-read.png"), animations: "disabled" });
+
+  await timeline.fill(String(changeIndex));
+  await expect(scene).toHaveAttribute("data-frame-index", String(changeIndex));
+  await expect(working.locator(".attention-changed").first()).toBeVisible();
+  expect(await working.locator(
+    '.attention-working-card[data-attention-level="full"]:not(:has(.attention-pinned))',
+  ).count()).toBeLessThanOrEqual(3);
+  await page.screenshot({ path: testInfo.outputPath("attention-nested-bfs-change.png"), animations: "disabled" });
+
+  const automaticIdsAt = async (index: number) => {
+    await timeline.fill(String(index));
+    await expect(scene).toHaveAttribute("data-frame-index", String(index));
+    return working.locator(
+      ".attention-working-card:not(:has(.attention-pinned))",
+    ).evaluateAll((cards) => cards.map((card) => card.getAttribute("data-attention-id")));
+  };
+  const readStepIds = await automaticIdsAt(graphReadIndex);
+  const changeStepIds = await automaticIdsAt(changeIndex);
+  const revisitedReadStepIds = await automaticIdsAt(graphReadIndex);
+  const revisitedChangeStepIds = await automaticIdsAt(changeIndex);
+  expect(revisitedReadStepIds).toEqual(readStepIds);
+  expect(revisitedChangeStepIds).toEqual(changeStepIds);
+  expect(readStepIds).toContain(graphReadId);
+  await expect(page.locator(".error-banner")).toHaveCount(0);
+});
+
+test("uses the same attention behavior for nested board, map, and history values", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Nested attention layout is covered at desktop size.");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  await waitForTrace(page, "/?example=nested-structures");
+  await expect(page.getByLabel("Example program")).toHaveValue("nested-structures");
+
+  const scene = page.locator(".visual-scene");
+  const timeline = page.getByLabel("Execution timeline");
+  const context = page.getByLabel("Context values");
+  const working = page.getByLabel("Working state");
+  await expect(context).toBeVisible();
+  await expect(working).toBeVisible();
+  const allLabels = await page.locator(
+    ".attention-card-heading strong, .attention-working-heading strong",
+  ).allTextContents();
+  const normalizedLabels = allLabels.map((label) => label.replaceAll('"', ""));
+  expect(normalizedLabels).toContain("board");
+  expect(normalizedLabels).toContain("scores");
+  expect(normalizedLabels).toContain("history");
+
+  const maximum = Number(await timeline.getAttribute("max"));
+  let changedLabels = new Set<string>();
+  let sawUsed = false;
+  for (let index = 0; index <= maximum; index += 1) {
+    await timeline.fill(String(index));
+    await expect(scene).toHaveAttribute("data-frame-index", String(index));
+    const fullAutomaticCount = await working.locator(
+      '.attention-working-card[data-attention-level="full"]:not(:has(.attention-pinned))',
+    ).count();
+    expect(fullAutomaticCount).toBeLessThanOrEqual(3);
+    sawUsed ||= (await working.locator(".attention-used").count()) > 0;
+    for (const card of await working.locator(".attention-working-card:has(.attention-changed)").all()) {
+      const label = await card.locator(".attention-working-heading strong").innerText();
+      changedLabels.add(label);
+    }
+    if (sawUsed && ["board", "scores", "history"].every((label) =>
+      [...changedLabels].some((changed) => changed.replaceAll('"', "") === label))) {
+      await page.screenshot({ path: testInfo.outputPath("attention-nested-structures.png"), animations: "disabled" });
+      break;
+    }
+  }
+  expect(sawUsed).toBe(true);
+  expect([...changedLabels].map((label) => label.replaceAll('"', ""))).toEqual(
+    expect.arrayContaining(["board", "scores", "history"]),
+  );
+
+  const rootStateCard = context.locator(
+    '.attention-context-card.activity-idle:has(.attention-card-heading strong[title="state"])',
+  ).first();
+  await expect(rootStateCard).toBeVisible();
+  const pinnedId = await rootStateCard.getAttribute("data-attention-id");
+  await rootStateCard.getByRole("button", { name: "Inspect state" }).click();
+  await expect(page.locator(".detail-view")).toBeVisible();
+  await page.getByRole("button", { name: "Back to execution" }).click();
+  await expect(page.locator(".visual-scene")).toBeVisible();
+  const currentWorkingIds = await working.locator(".attention-working-card").evaluateAll(
+    (cards) => cards.map((card) => card.getAttribute("data-attention-id")),
+  );
+  expect(currentWorkingIds).not.toContain(pinnedId);
+  await rootStateCard.getByRole("button", { name: "Pin state" }).click();
+  await expect(working.locator(".attention-working-card .attention-pinned")).toHaveCount(1);
+  await expect(working.locator(`.attention-working-card[data-attention-id="${pinnedId}"]`)).toBeVisible();
+  const timelineMaximum = Number(await timeline.getAttribute("max"));
+  await timeline.fill(String(timelineMaximum));
+  await expect(scene).toHaveAttribute("data-frame-index", String(timelineMaximum));
+  await expect.poll(() => working.locator(".attention-working-card").evaluateAll(
+    (cards, id) => cards.some((card) => card.getAttribute("data-attention-id") === id),
+    pinnedId,
+  )).toBe(true);
+
+  await page.getByRole("button", { name: "Run code" }).click();
+  await expect(page.getByRole("button", { name: "Run code" })).toBeEnabled({ timeout: 30_000 });
+  await expect(working.locator(".attention-pinned")).toHaveCount(0);
+
+  const replayPinCard = context.locator(
+    '.attention-context-card:has(.attention-card-heading strong[title="state"])',
+  ).first();
+  await replayPinCard.getByRole("button", { name: "Pin state" }).click();
+  await expect(working.locator(".attention-pinned")).toHaveCount(1);
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Save replay" }).click(),
+  ]);
+  const replayPath = await download.path();
+  expect(replayPath).toBeTruthy();
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: "Open replay" }).click(),
+  ]);
+  await fileChooser.setFiles(replayPath!);
+  await expect(scene).toBeVisible();
+  await expect(working.locator(".attention-pinned")).toHaveCount(0);
+
+  await page.getByLabel("Example program").selectOption("two-sum");
+  await page.getByRole("button", { name: "Run code" }).click();
+  await expect(page.getByRole("button", { name: "Run code" })).toBeEnabled({ timeout: 30_000 });
+  await expect(working.locator(".attention-pinned")).toHaveCount(0);
+
+  await expect(page.locator("html").evaluate((html) => html.scrollWidth <= html.clientWidth)).resolves.toBe(true);
+  const bounds = await page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>(".visualizer-wrap")!.getBoundingClientRect();
+    const contextBounds = document.querySelector<HTMLElement>('[aria-label="Context values"]')!.getBoundingClientRect();
+    const workingBounds = document.querySelector<HTMLElement>('[aria-label="Working state"]')!.getBoundingClientRect();
+    return { paneRight: pane.right, contextRight: contextBounds.right, workingRight: workingBounds.right };
+  });
+  expect(bounds.contextRight).toBeLessThanOrEqual(bounds.paneRight + 1);
+  expect(bounds.workingRight).toBeLessThanOrEqual(bounds.paneRight + 1);
+  expect(pageErrors).toEqual([]);
+});
+
+test("keeps object identity context and attention inside the visual pane", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Object graph geometry is inspected at desktop size.");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await waitForTrace(page, "/?example=binary-tree");
+  await expect(page.getByLabel("Example program")).toHaveValue("binary-tree");
+  const scene = page.locator(".visual-scene");
+  const relation = scene.locator(".relation-section");
+  const context = page.getByLabel("Context values");
+  const working = page.getByLabel("Working state");
+  await expect(relation).toBeVisible();
+  await expect(relation.getByRole("button", { name: "Expand object relationships" })).toBeVisible();
+  await expect(context).toBeVisible();
+  await expect(working).toBeVisible();
+  await expect(relation.locator(".relation-node")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("attention-object-tree.png"), animations: "disabled" });
+
+  const geometry = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector)!;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    };
+    const pane = box(".visualizer-wrap");
+    const relationSection = box(".relation-section");
+    const attention = box(".attention-workspace");
+    return {
+      pane,
+      relationSection,
+      attention,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      documentClientWidth: document.documentElement.clientWidth,
+      sceneScrollWidth: document.querySelector<HTMLElement>(".scene-content")!.scrollWidth,
+      sceneClientWidth: document.querySelector<HTMLElement>(".scene-content")!.clientWidth,
+      relationNodeCount: document.querySelectorAll(".relation-node").length,
+      relationDuplicateCards: [...document.querySelectorAll<HTMLElement>(".attention-context-card, .attention-working-card")]
+        .filter((card) => /node/i.test(card.innerText)).length,
+    };
+  });
+  expect(geometry.documentScrollWidth).toBeLessThanOrEqual(geometry.documentClientWidth);
+  expect(geometry.relationSection.left).toBeGreaterThanOrEqual(geometry.pane.left - 1);
+  expect(geometry.relationSection.right).toBeLessThanOrEqual(geometry.pane.right + 1);
+  expect(geometry.attention.left).toBeGreaterThanOrEqual(geometry.pane.left - 1);
+  expect(geometry.attention.right).toBeLessThanOrEqual(geometry.pane.right + 1);
+  expect(geometry.attention.bottom).toBeLessThanOrEqual(geometry.relationSection.top + 1);
+  await relation.getByRole("button", { name: "Expand object relationships" }).click();
+  await expect(relation.locator(".relation-node")).toHaveCount(6);
+});
+
+test("unknown example URL falls back to the default example", async ({ page }) => {
+  await waitForTrace(page, "/?example=not-a-known-example");
+  await expect(page.getByLabel("Example program")).toHaveValue("bubble-sort");
+});
+
 test("keeps extended algorithm frames useful and visuals semantically correct", async ({
   page,
 }, testInfo) => {
@@ -438,9 +905,16 @@ test("keeps extended algorithm frames useful and visuals semantically correct", 
       expect(maximum).toBeGreaterThan(0);
       if (problem.viewAsGraph) {
         await timeline.fill(String(maximum));
-        await page.getByRole("button", {
+        const graphView = page.getByRole("button", {
           name: `View ${problem.viewAsGraph} as a graph`,
-        }).click();
+        });
+        if (await graphView.count()) {
+          await graphView.click();
+        } else {
+          await expect(page.getByRole("button", {
+            name: `View ${problem.viewAsGraph} structurally`,
+          })).toBeVisible();
+        }
       }
 
       let largestProjection = 0;
@@ -579,12 +1053,18 @@ test("recursively inspects mixed payloads inside trees and cyclic graphs", async
     await expect(page.locator(".error-banner")).toHaveCount(0);
     const timeline = page.getByLabel("Execution timeline");
     await timeline.fill(await timeline.getAttribute("max") ?? "0");
+    await expandObjectRelationships(page);
   };
   const inspectNestedGrid = async () => {
+    await expandObjectRelationships(page);
     await page.locator(".relation-node").first().click();
     await expect(page.locator(".detail-view")).toBeVisible();
-    await page.locator(".nested-projection-token.kind-mapping").first().click();
-    await page.locator(".nested-projection-token.kind-grid").first().click();
+    await page.locator(
+      ".detail-content .projection-shell.kind-mapping > header > .projection-shell-inspect",
+    ).first().click();
+    await page.locator(
+      ".detail-content .projection-shell.kind-grid > header > .projection-shell-inspect",
+    ).first().click();
     await expect(page.locator(".detail-content .grid-cell")).toHaveCount(4);
     await expect(page.locator(".detail-breadcrumbs")).toBeVisible();
     while (await page.getByRole("button", {
@@ -609,7 +1089,7 @@ def solve():
     active = root.left
     return root`);
   await expect(page.locator(".relation-section header strong"))
-    .toHaveText("Object tree");
+    .toHaveText("Object relationships");
   await expect(page.locator(".relation-node")).toHaveCount(3);
   await inspectNestedGrid();
 
@@ -629,7 +1109,7 @@ def solve():
     current = second
     return first`);
   await expect(page.locator(".relation-section header strong"))
-    .toHaveText("Object graph");
+    .toHaveText("Object relationships");
   await expect(page.locator(".relation-node")).toHaveCount(3);
   await inspectNestedGrid();
 });
@@ -1753,6 +2233,8 @@ test("semantic zoom animates from the selected entity in both directions", async
   await waitForTrace(page);
   await page.getByLabel("Example program").selectOption("binary-tree");
   await page.getByRole("button", { name: "Run code" }).click();
+  await expect(page.getByRole("button", { name: "Run code" })).toBeEnabled({ timeout: 30_000 });
+  await expandObjectRelationships(page);
   await expect(page.locator(".relation-node").first()).toBeVisible({
     timeout: 30_000,
   });
@@ -1777,6 +2259,7 @@ test("renders a cyclic linked list as a directed circle", async ({
   await expect(page.getByRole("button", { name: "Run code" })).toBeEnabled({
     timeout: 30_000,
   });
+  await expandObjectRelationships(page);
   const timeline = page.getByLabel("Execution timeline");
   const maximum = Number(await timeline.getAttribute("max"));
   for (let index = 0; index <= maximum; index += 1) {
@@ -1787,7 +2270,7 @@ test("renders a cyclic linked list as a directed circle", async ({
   }
 
   await expect(page.locator(".relation-section header strong"))
-    .toHaveText("Object cycle");
+    .toHaveText("Object relationships");
   await expect(page.locator(".relation-edges > path")).toHaveCount(2);
   const paths = await page.locator(".relation-edges > path").evaluateAll(
     (elements) => elements.map((element) => ({
@@ -1825,6 +2308,7 @@ test("keeps a complete identity tree visible through recursive inversion", async
   await page.getByRole("button", { name: "Run code" }).click();
   const timeline = page.getByLabel("Execution timeline");
   await expect(timeline).toBeEnabled({ timeout: 30_000 });
+  await expandObjectRelationships(page);
   const maximum = Number(await timeline.getAttribute("max"));
   let foundDeepFrame = false;
 
@@ -1837,7 +2321,9 @@ test("keeps a complete identity tree visible through recursive inversion", async
     await expect(page.locator(".relation-node")).toHaveCount(7);
     expect(await page.locator(".relation-node").allTextContents())
       .not.toContain("Sol...");
-    await expect(page.locator(".object-token")).toHaveCount(0);
+    await expect(page.locator(
+      ".visual-scene .projection-shell.kind-object.collapsed",
+    )).toHaveCount(0);
     foundDeepFrame = true;
     break;
   }

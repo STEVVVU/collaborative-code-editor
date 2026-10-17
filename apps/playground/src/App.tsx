@@ -16,10 +16,11 @@ import {
   PlaybackControls,
   Visualizer,
 } from "@traceframe/react";
-import { examples } from "./examples";
+import { examples, type Example } from "./examples";
 import { PyodideDebuggerAdapter } from "@traceframe/python";
 import {
   compileScene,
+  compileAttentionTimeline,
   debuggerStepCount,
   debuggerStepForFrame,
   materializeDebuggerStep,
@@ -33,11 +34,17 @@ import {
   type DebuggerAdapter,
   type DebuggerStatus,
   type ExecutionTrace,
+  type AttentionSnapshot,
   type ProjectionContractsV1,
   type RunSpec,
 } from "@traceframe/core";
 
-const initialExample = examples[0];
+function initialExampleFromUrl(): Example {
+  const requestedId = typeof window === "undefined"
+    ? undefined
+    : new URLSearchParams(window.location.search).get("example");
+  return examples.find((example) => example.id === requestedId) ?? examples[0]!;
+}
 
 function statusLabel(status: DebuggerStatus, running: boolean): string {
   if (running || status === "running") {
@@ -53,6 +60,7 @@ function statusLabel(status: DebuggerStatus, running: boolean): string {
 }
 
 export default function App() {
+  const initialExample = useMemo(initialExampleFromUrl, []);
   const [source, setSource] = useState(initialExample.source);
   const [runMode, setRunMode] = useState<RunSpec["mode"]>(initialExample.runSpec.mode);
   const [entrypoint, setEntrypoint] = useState(
@@ -67,6 +75,7 @@ export default function App() {
   const [selectedExample, setSelectedExample] = useState(initialExample.id);
   const [trace, setTrace] = useState<ExecutionTrace>();
   const [frameIndex, setFrameIndex] = useState(0);
+  const [attentionSessionId, setAttentionSessionId] = useState(0);
   const [runtimeStatus, setRuntimeStatus] = useState<DebuggerStatus>("idle");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string>();
@@ -90,6 +99,15 @@ export default function App() {
   const executionTimeline = useMemo(
     () => trace ? materializeExecutionTimeline(trace) : [],
     [trace],
+  );
+  const attentionTimeline = useMemo<AttentionSnapshot[]>(
+    () => trace
+      ? compileAttentionTimeline(trace, {
+          projectionContracts,
+          executionTimeline,
+        })
+      : [],
+    [executionTimeline, projectionContracts, trace],
   );
   const executionState =
     executionTimeline[frameIndex] ??
@@ -205,6 +223,7 @@ export default function App() {
     try {
       const nextTrace = await adapter.execute({ source: code, runSpec });
       setTrace(nextTrace);
+      setAttentionSessionId((current) => current + 1);
       const firstModuleState = nextTrace.frames.findIndex(
         (frame) =>
           frame.functionName === "<module>" &&
@@ -330,16 +349,13 @@ export default function App() {
     setArgumentsText(runSpecArgumentsText(example.runSpec));
     setProjectionContracts(example.runSpec.projectionContracts);
     setTrace(undefined);
+    setAttentionSessionId((current) => current + 1);
     setFrameIndex(0);
     setPlaying(false);
   };
 
   const handleSourceChange = (value: string) => {
     setSource(value);
-    if (value !== source) {
-      // Contracts target known example or replay bindings, not arbitrary edited source.
-      setProjectionContracts(undefined);
-    }
     const selectedSource = examples.find((example) => example.id === selectedExample)?.source;
     if (selectedSource !== undefined && selectedSource !== value) {
       setSelectedExample("custom");
@@ -447,6 +463,7 @@ export default function App() {
       setProjectionContracts(restoredTrace.runSpec.projectionContracts);
       setSelectedExample("custom");
       setTrace(restoredTrace);
+      setAttentionSessionId((current) => current + 1);
       setFrameIndex(0);
       setPlaying(false);
       setError(restoredTrace.error);
@@ -670,6 +687,8 @@ export default function App() {
 
           <div className="visualizer-wrap">
             <Visualizer
+              attention={attentionTimeline[frameIndex]}
+              attentionSessionId={attentionSessionId}
               loading={running}
               onProjectionViewChange={handleProjectionViewChange}
               rendererConfig={{

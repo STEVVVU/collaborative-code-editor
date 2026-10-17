@@ -3,9 +3,6 @@ import {
   ArrowRight,
   ChevronRight,
   Layers,
-  List,
-  Maximize2,
-  Network,
   TerminalSquare,
 } from "lucide-react";
 import {
@@ -16,12 +13,15 @@ import {
   type CSSProperties,
 } from "react";
 import type {
+  AttentionSnapshot,
   SceneProjection,
   SemanticEvent,
   SerializedValue,
   VisualScene,
 } from "@traceframe/core";
+import { deriveSceneAttention } from "@traceframe/core";
 import { ProjectionKindLabel, ProjectionView } from "./ProjectionView";
+import { AttentionWorkspace } from "./AttentionWorkspace";
 import { RelationGraphView } from "./RelationGraphView";
 import { CallFlowView, RecursionView } from "./RecursionView";
 import { ControlFlowView } from "./ControlFlowView";
@@ -37,6 +37,8 @@ export interface VisualizerProps {
   scene?: VisualScene;
   loading: boolean;
   statusText: string;
+  attention?: AttentionSnapshot;
+  attentionSessionId?: string | number;
   rendererConfig?: Partial<TraceframeRendererConfig>;
   onProjectionViewChange?: (
     variableName: string,
@@ -93,6 +95,59 @@ function findProjectionByKey(
       .find((item) => item !== undefined);
   }
   return undefined;
+}
+
+function findProjectionByPath(
+  projection: SceneProjection,
+  currentPath: string,
+  targetPath: string,
+): SceneProjection | undefined {
+  if (currentPath === targetPath) {
+    return projection;
+  }
+
+  const children =
+    projection.kind === "sequence"
+      ? projection.items.map((item, index) => [
+          `${currentPath}[${index}]`,
+          item,
+        ] as const)
+      : projection.kind === "grid"
+        ? projection.rows.flatMap((row, rowIndex) =>
+            row.map((item, columnIndex) => [
+              `${currentPath}[${rowIndex}][${columnIndex}]`,
+              item,
+            ] as const)
+          )
+        : projection.kind === "graph"
+          ? projection.vertices.map((vertex, index) => [
+              `${currentPath}[${index}]`,
+              vertex.adjacency,
+            ] as const)
+          : projection.kind === "mapping"
+            ? projection.entries.flatMap((entry, index) => [
+                [`${currentPath}{${index}}.key`, entry.key] as const,
+                [`${currentPath}{${index}}.value`, entry.value] as const,
+              ])
+            : projection.kind === "object"
+              ? projection.fields.map((field) => [
+                  `${currentPath}.${field.name}`,
+                  field.value,
+                ] as const)
+              : [];
+
+  for (const [childPath, child] of children) {
+    const match = findProjectionByPath(child, childPath, targetPath);
+    if (match) {
+      return match;
+    }
+  }
+  return undefined;
+}
+
+interface DetailSelection {
+  key: string;
+  path?: string;
 }
 
 function eventValue(value: SerializedValue | undefined): string {
@@ -265,6 +320,8 @@ function VisualizerContent({
   scene,
   loading,
   statusText,
+  attention,
+  attentionSessionId = "default",
   onProjectionViewChange,
 }: Omit<VisualizerProps, "rendererConfig">) {
   const rendererConfig = useTraceframeRendererConfig();
@@ -272,30 +329,49 @@ function VisualizerContent({
     "--tf-state-transition-duration":
       `${rendererConfig.stateTransitionMs}ms`,
   } as CSSProperties;
-  const primaryVariablesRef = useRef<HTMLDivElement>(null);
   const sceneRootRef = useRef<HTMLDivElement>(null);
-  const [detailKeys, setDetailKeys] = useState<string[]>([]);
+  const [detailSelections, setDetailSelections] = useState<DetailSelection[]>([]);
+  const [relationsExpanded, setRelationsExpanded] = useState(false);
   const [retainedRelationGraph, setRetainedRelationGraph] = useState(
     scene?.relationGraph,
   );
-  const inspect = (projection: SceneProjection) => {
-    setDetailKeys((current) =>
-      current.at(-1) === projection.key
+  const inspect = (projection: SceneProjection, path?: string) => {
+    setDetailSelections((current) => {
+      const last = current.at(-1);
+      return last?.key === projection.key && last.path === path
         ? current
-        : [...current, projection.key],
-    );
+        : [...current, { key: projection.key, path }];
+    });
   };
+  useEffect(() => {
+    setDetailSelections([]);
+    setRelationsExpanded(false);
+  }, [attentionSessionId]);
   const detailTrail = useMemo(() => {
     if (!scene) {
       return [];
     }
     const resolved: SceneProjection[] = [];
-    for (const key of detailKeys) {
+    for (const selection of detailSelections) {
       let match: SceneProjection | undefined;
-      for (const variable of scene.variables) {
-        match = findProjectionByKey(variable.projection, key);
-        if (match) {
-          break;
+      if (selection.path) {
+        for (const variable of scene.variables) {
+          match = findProjectionByPath(
+            variable.projection,
+            variable.name,
+            selection.path,
+          );
+          if (match) {
+            break;
+          }
+        }
+      }
+      if (!match) {
+        for (const variable of scene.variables) {
+          match = findProjectionByKey(variable.projection, selection.key);
+          if (match) {
+            break;
+          }
         }
       }
       if (!match) {
@@ -304,8 +380,9 @@ function VisualizerContent({
       resolved.push(match);
     }
     return resolved;
-  }, [detailKeys, scene]);
+  }, [detailSelections, scene]);
   const detail = detailTrail.at(-1);
+  const detailPath = detailSelections.at(detailTrail.length - 1)?.path;
   useEffect(() => {
     if (scene?.relationGraph) {
       setRetainedRelationGraph(scene.relationGraph);
@@ -336,67 +413,10 @@ function VisualizerContent({
           roots: [],
         }
       : undefined);
-  const primaryVariableGroups = useMemo(() => {
-    const visible =
-      scene?.variables.filter(
-        (variable) => {
-          if (!isPrimaryProjection(variable.projection)) {
-            return false;
-          }
-          if (variable.projection.kind !== "object") {
-            return true;
-          }
-          const represented = scene.relationGraph?.entities.some(
-            (entity) => entity.id === variable.projection.key,
-          );
-          if (represented) {
-            return false;
-          }
-          const activelyFocused = scene.focusPaths.some(
-            (path) =>
-              path === variable.name ||
-              path.startsWith(`${variable.name}.`) ||
-              path.startsWith(`${variable.name}[`) ||
-              path.startsWith(`${variable.name}{`),
-          );
-          const emptyDisconnectedObject =
-            variable.projection.fields.length === 0 &&
-            !activelyFocused;
-          return !emptyDisconnectedObject;
-        },
-      ) ?? [];
-    const groups = new Map<string, {
-      aliases: string[];
-      changed: boolean;
-      variable: (typeof visible)[number];
-    }>();
-    visible.forEach((variable) => {
-      const key = `${variable.projection.kind}:${variable.projection.key}`;
-      const existing = groups.get(key);
-      if (!existing) {
-        groups.set(key, {
-          aliases: [variable.name],
-          changed: variable.changed,
-          variable,
-        });
-        return;
-      }
-      existing.aliases.push(variable.name);
-      existing.changed ||= variable.changed;
-      if (
-        scene?.focusPaths.some(
-          (path) =>
-            path === variable.name ||
-            path.startsWith(`${variable.name}.`) ||
-            path.startsWith(`${variable.name}[`) ||
-            path.startsWith(`${variable.name}{`),
-        )
-      ) {
-        existing.variable = variable;
-      }
-    });
-    return [...groups.values()];
-  }, [scene]);
+  const sceneAttention = useMemo(
+    () => attention ?? (scene ? deriveSceneAttention(scene) : undefined),
+    [attention, scene],
+  );
   const compactVariables = useMemo(
     () => scene?.variables.filter((variable) => !isPrimaryProjection(variable.projection)) ?? [],
     [scene],
@@ -443,6 +463,7 @@ function VisualizerContent({
     scene?.motionPlan,
     detail?.key ?? "overview",
     rendererConfig.motionDurationMs,
+    relationsExpanded ? "relationships-expanded" : "relationships-collapsed",
   );
   useOperationMotion(
     sceneRootRef,
@@ -452,24 +473,13 @@ function VisualizerContent({
   );
 
   useEffect(() => {
-    if (scene && detailKeys.length > 0 && detailTrail.length !== detailKeys.length) {
-      setDetailKeys((current) => current.slice(0, detailTrail.length));
+    if (
+      scene && detailSelections.length > 0 &&
+      detailTrail.length !== detailSelections.length
+    ) {
+      setDetailSelections((current) => current.slice(0, detailTrail.length));
     }
-  }, [detailKeys.length, detailTrail.length, scene]);
-
-  useEffect(() => {
-    const primary = primaryVariablesRef.current;
-    if (!primary) {
-      return;
-    }
-    primary.scrollTop = 0;
-    primary.scrollLeft = 0;
-    const animationFrame = requestAnimationFrame(() => {
-      primary.scrollTop = 0;
-      primary.scrollLeft = 0;
-    });
-    return () => cancelAnimationFrame(animationFrame);
-  }, [scene?.frameIndex]);
+  }, [detailSelections.length, detailTrail.length, scene]);
 
   if (loading && !scene) {
     return (
@@ -503,9 +513,9 @@ function VisualizerContent({
         <div className="detail-toolbar">
           <button
             className="icon-button"
-            onClick={() => setDetailKeys((current) => current.slice(0, -1))}
-            title={detailKeys.length > 1 ? "Back to parent value" : "Back to execution"}
-            aria-label={detailKeys.length > 1 ? "Back to parent value" : "Back to execution"}
+            onClick={() => setDetailSelections((current) => current.slice(0, -1))}
+            title={detailSelections.length > 1 ? "Back to parent value" : "Back to execution"}
+            aria-label={detailSelections.length > 1 ? "Back to parent value" : "Back to execution"}
             type="button"
           >
             <ArrowLeft size={17} aria-hidden="true" />
@@ -520,7 +530,7 @@ function VisualizerContent({
                     <strong>{item.label}</strong>
                   ) : (
                     <button
-                      onClick={() => setDetailKeys((current) => current.slice(0, index + 1))}
+                      onClick={() => setDetailSelections((current) => current.slice(0, index + 1))}
                       type="button"
                     >
                       {item.label}
@@ -537,6 +547,7 @@ function VisualizerContent({
             projection={detail}
             depth={0}
             expanded
+            path={detailPath ?? detail.label}
             focusedGraphVertexIds={scene.focusedGraphVertexIds}
             graphMemberships={scene.graphMemberships}
             variableMarkers={scene.variableMarkers}
@@ -583,112 +594,40 @@ function VisualizerContent({
       )}
 
       <div className="scene-content">
-        <div
-          className="primary-variables"
-          ref={primaryVariablesRef}
-        >
-          {relationHeadingGraph && relationMotionGraph && (
-            <section className="relation-section tf-enter">
-              <header>
-                <div>
-                  <strong>
-                    {relationHeadingGraph.layout === "tree"
-                      ? "Object tree"
-                      : relationHeadingGraph.layout === "cycle"
-                        ? "Object cycle"
-                        : "Object graph"}
-                  </strong>
-                  <span>{relationHeadingGraph.entities.length} identities</span>
-                </div>
-              </header>
-              <RelationGraphView
-                graph={relationMotionGraph}
-                entityBindings={scene.entityBindings}
-                focusedEntityIds={scene.focusedEntityIds}
-                focusedRelationKeys={scene.focusedRelationKeys}
-                onInspect={inspect}
-              />
-            </section>
-          )}
+        <div className="primary-variables">
           {scene.callFlow ? (
             <CallFlowView callFlow={scene.callFlow} />
           ) : scene.recursion ? (
             <RecursionView recursion={scene.recursion} />
           ) : null}
           <ControlFlowView control={scene.controlFlow} />
-          {primaryVariableGroups.map(({ aliases, changed, variable }) => {
-            const facet = variable.graphFacet;
-            const graphView = variable.projection.kind === "graph";
-            return (
-              <section
-                className={`variable-panel tf-enter ${changed ? "changed" : ""}`}
-                data-variable-aliases={aliases.join(" ")}
-                key={`${variable.projection.kind}:${variable.projection.key}`}
-              >
-                <header className="variable-heading">
-                  <div>
-                    <strong>{aliases[0]}</strong>
-                    {aliases.length > 1 && (
-                      <span className="variable-alias">
-                        = {aliases.slice(1).join(", ")}
-                      </span>
-                    )}
-                    <ProjectionKindLabel projection={variable.projection} />
-                  </div>
-                  <div className="variable-actions">
-                    {onProjectionViewChange && (facet || graphView) && (
-                      <button
-                        className="inspect-button"
-                        onClick={() =>
-                          onProjectionViewChange(
-                            variable.name,
-                            graphView ? "structural" : "graph",
-                            facet?.directed,
-                          )
-                        }
-                        title={
-                          graphView
-                            ? `View ${variable.name} structurally`
-                            : `View ${variable.name} as a graph`
-                        }
-                        aria-label={
-                          graphView
-                            ? `View ${variable.name} structurally`
-                            : `View ${variable.name} as a graph`
-                        }
-                        type="button"
-                      >
-                        {graphView
-                          ? <List size={15} aria-hidden="true" />
-                          : <Network size={15} aria-hidden="true" />}
-                      </button>
-                    )}
-                    <button
-                      className="inspect-button"
-                      onClick={() => inspect(variable.projection)}
-                      title={`Inspect ${variable.name}`}
-                      aria-label={`Inspect ${variable.name}`}
-                      type="button"
-                    >
-                      <Maximize2 size={15} aria-hidden="true" />
-                    </button>
-                  </div>
-                </header>
-                <div className="variable-content">
-                  <ProjectionView
-                    projection={variable.projection}
-                    changed={variable.changed}
-                    path={variable.name}
-                    focusPaths={scene.focusPaths}
-                    variableMarkers={scene.variableMarkers}
-                    focusedGraphVertexIds={scene.focusedGraphVertexIds}
-                    graphMemberships={scene.graphMemberships}
-                    onInspect={inspect}
-                  />
+          {sceneAttention && <AttentionWorkspace scene={scene} attention={sceneAttention} sessionId={attentionSessionId} onInspect={inspect} onProjectionViewChange={onProjectionViewChange} />}
+          {relationHeadingGraph && relationMotionGraph && (
+            <section className={`relation-section tf-enter ${relationsExpanded ? "expanded" : "collapsed"}`}>
+              <header>
+                <div>
+                  <strong>Object relationships</strong>
+                  <span>{relationHeadingGraph.entities.length} identities</span>
                 </div>
-              </section>
-            );
-          })}
+                <button
+                  aria-expanded={relationsExpanded}
+                  aria-label={`${relationsExpanded ? "Collapse" : "Expand"} object relationships`}
+                  className="relation-disclosure-toggle"
+                  onClick={() => setRelationsExpanded((expanded) => !expanded)}
+                  type="button"
+                >
+                  {relationsExpanded ? "Collapse" : "Expand"}
+                </button>
+              </header>
+              {relationsExpanded && <RelationGraphView
+                graph={relationMotionGraph}
+                entityBindings={scene.entityBindings}
+                focusedEntityIds={scene.focusedEntityIds}
+                focusedRelationKeys={scene.focusedRelationKeys}
+                onInspect={inspect}
+              />}
+            </section>
+          )}
         </div>
 
         {compactVariables.length > 0 && (

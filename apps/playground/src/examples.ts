@@ -418,4 +418,140 @@ def cycle_sum(head, steps):
       ],
     },
   },
+  {
+    id: "nested-graphs",
+    name: "Nested graph batches",
+    source: `class BatchMetadata:
+    pass
+
+def inspect_networks(state):
+    edge_count = 0
+    for batch in state["batches"]:
+        for graph in batch["graphs"].values():
+            for neighbors in graph:
+                edge_count += len(neighbors)
+    return state
+`,
+    runSpec: {
+      mode: "function",
+      entrypoint: "inspect_networks",
+      arguments: [{
+        batches: [
+          {
+            graphs: {
+              "two-node": [[1], [0]],
+              "four-node": [[1, 2], [0, 3], [0, 3], [1, 2]],
+            },
+            label: "primary",
+          },
+          {
+            graphs: {
+              "three-node": [[1], [0, 2], [1]],
+              "four-node-star": [[1, 2, 3], [0], [0], [0]],
+            },
+            label: "secondary",
+          },
+        ],
+        board: [[1, 2], [3, 4]],
+        metadata: {
+          $kind: "object",
+          type: "BatchMetadata",
+          fields: { owner: "Traceframe", tags: ["nested", "graph"] },
+        },
+      }],
+      projectionContracts: {
+        version: 1,
+        declarations: [{
+          id: "graphs-in-every-batch",
+          target: {
+            root: { kind: "binding", name: "state" },
+            segments: [
+              { kind: "mapKey", key: { kind: "scalar", type: "str", value: "batches" } },
+              { kind: "each" },
+              { kind: "mapKey", key: { kind: "scalar", type: "str", value: "graphs" } },
+              { kind: "each" },
+            ],
+          },
+          configuration: {
+            kind: "graph",
+            representation: "adjacency-list",
+            directed: false,
+          },
+        }],
+      },
+    },
+  },
+  {
+    id: "nested-bfs",
+    name: "Nested graph BFS",
+    source: `class BatchMetadata:
+    pass
+
+def inspect_networks(state):
+    for batch in state["batches"]:
+        batch["distances"] = {}
+        batch["queues"] = {}
+        for name, graph in batch["graphs"].items():
+            distances = [-1] * len(graph)
+            queue = []
+            batch["distances"][name] = distances
+            batch["queues"][name] = queue
+            if graph:
+                distances[0] = 0
+                queue.append(0)
+            while queue:
+                node = queue.pop(0)
+                for neighbor in graph[node]:
+                    if distances[neighbor] == -1:
+                        distances[neighbor] = distances[node] + 1
+                        queue.append(neighbor)
+    return state
+`,
+    runSpec: {
+      mode: "function",
+      entrypoint: "inspect_networks",
+      arguments: [{
+        batches: [
+          {
+            label: "connected",
+            distances: {},
+            queues: {},
+            graphs: {
+              chain: [[1], [0, 2], [1, 3], [2, 4], [3]],
+              cycle: [[1, 3], [0, 2], [1, 3], [0, 2]],
+            },
+          },
+          {
+            label: "mixed",
+            distances: {},
+            queues: {},
+            graphs: {
+              star: [[1, 2, 3, 4], [0], [0], [0], [0]],
+              disconnected: [[1], [0, 2], [1], [4], [3], []],
+            },
+          },
+        ],
+      }],
+      projectionContracts: {
+        version: 1,
+        declarations: [{
+          id: "graphs-in-every-batch",
+          target: {
+            root: { kind: "binding", name: "state" },
+            segments: [
+              { kind: "mapKey", key: { kind: "scalar", type: "str", value: "batches" } },
+              { kind: "each" },
+              { kind: "mapKey", key: { kind: "scalar", type: "str", value: "graphs" } },
+              { kind: "each" },
+            ],
+          },
+          configuration: {
+            kind: "graph",
+            representation: "adjacency-list",
+            directed: false,
+          },
+        }],
+      },
+    },
+  },
 ];

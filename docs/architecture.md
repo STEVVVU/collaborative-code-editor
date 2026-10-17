@@ -34,6 +34,38 @@ directed flag. Contracts are explicit: nested collections retain structural sequ
 projections unless a matching contract selects a graph. Contract targets are resolved through
 serialized runtime identity, so aliases of a contracted value share the same graph projection.
 
+Path segments can name an object field, sequence or set index, exact scalar mapping key, or `each`.
+`each` selects immediate sequence/set items, mapping values, or object field values; it never selects
+mapping keys or follows references. Segments compose, so a path can select each batch and then each
+graph value inside its `graphs` field. Empty or non-container matches select no values. Matches are
+deduplicated by runtime identity for contract resolution, while every occurrence remains in the
+scene projection and can be inspected at its own containment path.
+
+The React renderer recursively composes child projections inside their containing values. It uses
+child content to size nested sequence, grid, mapping, object, and graph views, while collapse and
+inspect controls let users reduce or open dense subtrees. Explicit graph contracts therefore affect
+the actual nested scene wherever their selected values occur; users can inspect an individual value
+through the existing detail view and breadcrumbs.
+
+The execution attention workspace keeps all visible structures in a compact context strip and
+automatically promotes a bounded set of relevant values to full working views. Runtime reads are
+marked as in use, while actual value differences carry their own changed state and summaries. Users
+can pin context values into the workspace; pins remain while seeking and reset when a run, example,
+or replay starts a new attention session. Object relationship diagrams appear after the workspace,
+collapsed by default; expanding one preserves that choice while seeking and a new attention session
+collapses it again.
+
+Graph contracts are explicit view settings carried with the run configuration. Editing source does
+not clear them; selecting another example or loading a replay replaces them with that example's or
+replay's settings. Targets are still resolved against runtime bindings on each frame. A missing path
+selects nothing, and a selected value that does not satisfy the adjacency-list contract retains the
+existing invalid-contract projection.
+
+Scoped path selection and recursive composition are inspired by Bluefish's declarative selectors and
+compositional scene descriptions ([paper](https://vis.mit.edu/pubs/bluefish.pdf), sections 4.2.4 and
+5.2.1). Traceframe applies these ideas to runtime projection contracts and nested rendering. It does
+not adopt Bluefish's shared-child identity model or constraint ownership system.
+
 ### Tagged Inputs
 
 Plain JSON values pass through unchanged. Tagged JSON objects can materialize arbitrary
@@ -132,6 +164,12 @@ Resolved read paths focus the same projection entities used by writes and compar
 indexes focus cells; object-field reads focus relation nodes and their connecting edges. This
 keeps operation instrumentation independent from renderer-specific coordinates.
 
+Graph-vertex focus first uses resolved access paths to identify the graph occurrence (and row)
+being read. If an operation supplies only scalar values, the compiler matches those values when
+there is one distinct graph identity in the scene; with multiple graphs it leaves graph focus
+unset rather than highlighting equal labels in unrelated graphs. Multiple bindings to the same
+graph identity count as one graph for this fallback.
+
 Bracket resolution follows the serialized runtime value at each segment. Sequence indexes remain
 numeric paths, while mapping access resolves the evaluated key to a stable entry slot. Canonical
 map slots stay internal; user-facing flow labels reconstruct concrete keys such as
@@ -167,16 +205,24 @@ call stack independently represents recursive depth and return flow.
 
 ## Semantic Zoom
 
-Overview and detail are separate projections of the same value:
+The execution overview gives the active working set a stable workspace and keeps other values in
+a compact context strip. Every composite uses the same levels of detail: a token, a thumbnail, or
+the full projection. A generic attention timeline ranks runtime reads, actual value changes, and
+their causal inputs; it keeps at most three automatic working views and derives the same result
+when the user seeks directly to a frame. Read activity and state changes remain distinct. Users
+can pin a view for the current trace, and a pin whose value is no longer present is shown as
+unavailable.
 
-- Overview gives the active algorithm enough stable structure for comparison and motion.
-- Detail recursively exposes the selected value without resizing unrelated entities.
+Detail opens the selected occurrence with breadcrumb navigation while keeping the containment
+path, runtime identity, and trace position synchronized. An inspect control on a nested composite
+opens that occurrence in the detail viewport; collapse controls remain available at every level.
+Detail selections retain both the rooted containment path and runtime identity: exact paths resolve
+the clicked occurrence first, with identity-key lookup as a fallback when a path is no longer
+present.
 
-Overview rendering expands exactly one structural level. Any nested sequence, grid, graph,
-mapping, or object becomes a fixed-size token carrying its kind and cardinality. Scalar cells are
-also width-bounded. Selecting a token opens that one layer in the detail viewport; deeper values
-remain interactive tokens. Detail history and breadcrumbs permit unbounded recursive drill-down
-while identity, path, and trace position remain synchronized.
+Nested projections remain inspectable in context and detail, with shared runtime identity and
+containment paths across aliases. Automatic attention is a presentation policy over execution facts;
+it does not use example names or collection-specific roles.
 
 ## Replay Files
 
@@ -213,6 +259,7 @@ restrict network access and isolate execution at the origin or server-container 
    linked lists, cycles, or general relation graphs even when nested inside containers.
 4. Semantic lenses request attention; they do not choose renderer coordinates.
 5. Motion is matched by stable location or entity identity, never by transient screen position.
-6. Nested payloads remain recursively inspectable without resizing their overview container.
+6. Nested payloads compose recursively; collapse controls manage dense subtrees without changing
+   their semantic projection.
 7. Adapter-specific tracing may be replaced or extended, but all languages emit the same Trace
    IR facts before visualization.

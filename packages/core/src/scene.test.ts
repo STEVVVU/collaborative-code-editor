@@ -27,6 +27,15 @@ function row(id: string, values: number[]): SerializedValue {
   };
 }
 
+function adjacencyGraph(id: string, neighbors: number[][]): SerializedValue {
+  return {
+    kind: "sequence",
+    id,
+    type: "list",
+    items: neighbors.map((values, index) => row(`${id}-neighbors-${index}`, values)),
+  };
+}
+
 describe("ProjectionRegistry", () => {
   it("lifts rectangular nested sequences into a grid projection", () => {
     const grid: SerializedValue = {
@@ -475,6 +484,287 @@ describe("ProjectionRegistry", () => {
         depth: 0,
       }).kind,
     ).toBe("graph");
+  });
+
+  it("selects immediate sequence, set, mapping-value, and object-field children", () => {
+    const graphs = [
+      adjacencyGraph("each-sequence-graph", [[1], [0]]),
+      adjacencyGraph("each-set-graph", [[1], [0]]),
+      adjacencyGraph("each-mapping-graph", [[1, 2], [0], [0]]),
+      adjacencyGraph("each-object-graph", [[1], [0]]),
+    ];
+    const bindings: Record<string, SerializedValue> = {
+      sequence: { kind: "sequence", id: "sequence-container", type: "list", items: [graphs[0]] },
+      set: { kind: "set", id: "set-container", type: "set", items: [graphs[1]] },
+      mapping: {
+        kind: "mapping",
+        id: "mapping-container",
+        type: "dict",
+        entries: [[stringScalar("graph"), graphs[2]]],
+      },
+      object: {
+        kind: "object",
+        id: "object-container",
+        type: "Graphs",
+        fields: { graph: graphs[3] },
+      },
+    };
+    const contracts: ProjectionContractsV1 = {
+      version: 1,
+      declarations: Object.keys(bindings).map((name) => ({
+        id: `${name}-children`,
+        target: {
+          root: { kind: "binding" as const, name },
+          segments: [{ kind: "each" as const }],
+        },
+        configuration: {
+          kind: "graph" as const,
+          representation: "adjacency-list" as const,
+          directed: false,
+        },
+      })),
+    };
+    const registry = new ProjectionRegistry([], contracts, bindings);
+
+    expect(graphs.map((graph) => registry.project(graph, {
+      key: "graph",
+      label: "graph",
+      depth: 0,
+    }).kind)).toEqual(["graph", "graph", "graph", "graph"]);
+    const mappingKey = (bindings.mapping as Extract<SerializedValue, { kind: "mapping" }>).entries[0][0];
+    expect(registry.project(mappingKey, {
+      key: "mapping-key",
+      label: "mapping-key",
+      depth: 0,
+    }).kind).toBe("scalar");
+  });
+
+  it("composes each selectors through nested containers for differently sized graphs", () => {
+    const smallGraph = adjacencyGraph("nested-small-graph", [[1], [0]]);
+    const largeGraph: SerializedValue = {
+      kind: "sequence",
+      id: "nested-large-graph",
+      type: "list",
+      items: [
+        row("nested-large-neighbors-0", [1, 3]),
+        row("nested-large-neighbors-1", [0, 2]),
+        row("nested-large-neighbors-2", [1, 3]),
+        row("nested-large-neighbors-3", [0, 2]),
+      ],
+    };
+    const state: SerializedValue = {
+      kind: "mapping",
+      id: "nested-state",
+      type: "dict",
+      entries: [
+        [stringScalar("batches"), {
+          kind: "sequence",
+          id: "nested-batches",
+          type: "list",
+          items: [
+            {
+              kind: "mapping",
+              id: "nested-batch-a",
+              type: "dict",
+              entries: [[stringScalar("graphs"), {
+                kind: "mapping",
+                id: "nested-graphs-a",
+                type: "dict",
+                entries: [
+                  [stringScalar("small"), smallGraph],
+                  [stringScalar("small-alias"), smallGraph],
+                ],
+              }]],
+            },
+            {
+              kind: "mapping",
+              id: "nested-batch-b",
+              type: "dict",
+              entries: [[stringScalar("graphs"), {
+                kind: "mapping",
+                id: "nested-graphs-b",
+                type: "dict",
+                entries: [[stringScalar("large"), largeGraph]],
+              }]],
+            },
+          ],
+        }],
+        [stringScalar("metadata"), {
+          kind: "sequence",
+          id: "nested-metadata",
+          type: "list",
+          items: [scalar(2), scalar(4)],
+        }],
+      ],
+    };
+    const contracts: ProjectionContractsV1 = {
+      version: 1,
+      declarations: [{
+        id: "all-batch-graphs",
+        target: {
+          root: { kind: "binding", name: "state" },
+          segments: [
+            { kind: "mapKey", key: stringScalar("batches") },
+            { kind: "each" },
+            { kind: "mapKey", key: stringScalar("graphs") },
+            { kind: "each" },
+          ],
+        },
+        configuration: {
+          kind: "graph",
+          representation: "adjacency-list",
+          directed: false,
+        },
+      }],
+    };
+    const registry = new ProjectionRegistry([], contracts, { state });
+
+    const smallProjection = registry.project(smallGraph, {
+      key: "small",
+      label: "small",
+      depth: 0,
+    });
+    const largeProjection = registry.project(largeGraph, {
+      key: "large",
+      label: "large",
+      depth: 0,
+    });
+    const scene = registry.project(state, { key: "state", label: "state", depth: 0 });
+
+    expect(smallProjection).toMatchObject({ kind: "graph", vertices: [{}, {}] });
+    expect(largeProjection).toMatchObject({ kind: "graph", vertices: [{}, {}, {}, {}] });
+    expect(scene.kind).toBe("mapping");
+    if (scene.kind === "mapping") {
+      expect(scene.entries[1].value.kind).toBe("sequence");
+    }
+    const aliasProjection = registry.project(smallGraph, {
+      key: "small-alias",
+      label: "small-alias",
+      depth: 0,
+    });
+    expect(aliasProjection).toMatchObject({ kind: "graph", key: "nested-small-graph" });
+  });
+
+  it("deduplicates aliases selected by each and preserves conflicting-contract errors", () => {
+    const graph = adjacencyGraph("each-alias-graph", [[1], [0]]);
+    const mapping: SerializedValue = {
+      kind: "mapping",
+      id: "each-alias-map",
+      type: "dict",
+      entries: [
+        [stringScalar("primary"), graph],
+        [stringScalar("alias"), { kind: "reference", targetId: graph.id, type: "list" }],
+      ],
+    };
+    const eachContract: ProjectionContractsV1 = {
+      version: 1,
+      declarations: [{
+        id: "all-values",
+        target: {
+          root: { kind: "binding", name: "graphs" },
+          segments: [{ kind: "each" }],
+        },
+        configuration: {
+          kind: "graph",
+          representation: "adjacency-list",
+          directed: false,
+        },
+      }],
+    };
+    const aliasContract = {
+      id: "explicit-alias",
+      target: {
+        root: { kind: "binding" as const, name: "graphs" },
+        segments: [{ kind: "mapKey" as const, key: stringScalar("alias") }],
+      },
+      configuration: {
+        kind: "graph" as const,
+        representation: "adjacency-list" as const,
+        directed: true,
+      },
+    };
+    const registry = new ProjectionRegistry([], eachContract, { graphs: mapping });
+
+    expect(registry.project(graph, { key: "graph", label: "graph", depth: 0 }).kind)
+      .toBe("graph");
+    expect(registry.project(mapping.entries[1][1], {
+      key: "alias",
+      label: "alias",
+      depth: 0,
+    }).kind).toBe("graph");
+    expect(() => new ProjectionRegistry([], {
+      ...eachContract,
+      declarations: [...eachContract.declarations, aliasContract],
+    }, { graphs: mapping })).toThrow("resolve to identity 'each-alias-graph'");
+  });
+
+  it("treats scalar matches as invalid graphs and does not follow reference leaves", () => {
+    const numbers: SerializedValue = {
+      kind: "sequence",
+      id: "scalar-children",
+      type: "list",
+      items: [scalar(1), scalar(2)],
+    };
+    const cycle: SerializedValue = {
+      kind: "sequence",
+      id: "cycle-root",
+      type: "list",
+      items: [{ kind: "reference", targetId: "cycle-root", type: "list" }],
+    };
+    const contracts: ProjectionContractsV1 = {
+      version: 1,
+      declarations: [{
+        id: "scalar-children",
+        target: {
+          root: { kind: "binding", name: "numbers" },
+          segments: [{ kind: "each" }],
+        },
+        configuration: {
+          kind: "graph",
+          representation: "adjacency-list",
+          directed: false,
+        },
+      }, {
+        id: "cycle-children",
+        target: {
+          root: { kind: "binding", name: "cycle" },
+          segments: [{ kind: "each" }, { kind: "each" }],
+        },
+        configuration: {
+          kind: "graph",
+          representation: "adjacency-list",
+          directed: false,
+        },
+      }, {
+        id: "missing-child",
+        target: {
+          root: { kind: "binding", name: "cycle" },
+          segments: [{ kind: "index", index: 5 }, { kind: "each" }],
+        },
+        configuration: {
+          kind: "graph",
+          representation: "adjacency-list",
+          directed: true,
+        },
+      }],
+    };
+    const registry = new ProjectionRegistry([], contracts, { numbers, cycle });
+
+    expect(registry.project(numbers.items[0], {
+      key: "number",
+      label: "number",
+      depth: 0,
+    })).toMatchObject({
+      kind: "truncated",
+      preview: "Invalid adjacency-list graph contract",
+    });
+    expect(registry.project(cycle, { key: "cycle", label: "cycle", depth: 0 }).kind)
+      .toBe("sequence");
+    expect(registry.project(cycle.items[0], {
+      key: "cycle-ref",
+      label: "cycle-ref",
+      depth: 0,
+    }).kind).toBe("reference");
   });
 
   it("retains contracted identities when a binding is rebound", () => {
@@ -1601,6 +1891,164 @@ describe("compileScene", () => {
       variableName: "visited",
       vertexIds: ["adjacency:vertex:0", "adjacency:vertex:2"],
     }]);
+  });
+
+  it("scopes graph access focus to the graph that was read", () => {
+    const graphA: SerializedValue = {
+      kind: "sequence",
+      id: "graph-a",
+      type: "list",
+      items: [row("graph-a-row-0", [1]), row("graph-a-row-1", [0])],
+    };
+    const graphB: SerializedValue = {
+      kind: "sequence",
+      id: "graph-b",
+      type: "list",
+      items: [row("graph-b-row-0", [1]), row("graph-b-row-1", [0])],
+    };
+    const frame: TraceFrame = {
+      index: 12,
+      event: "line",
+      source: { line: 9 },
+      functionName: "walk",
+      scopeId: "walk:2",
+      depth: 1,
+      callStack: [],
+      locals: { graphA, graphB, node: scalar(0) },
+      stdout: "",
+      changes: [],
+      semanticEvents: [{
+        kind: "read",
+        source: { line: 9 },
+        expression: "graphA[node]",
+        argumentExpressions: ["node"],
+        arguments: [scalar(0)],
+        result: graphA.items[0],
+      }],
+    };
+    const contracts: ProjectionContractsV1 = {
+      version: 1,
+      declarations: ["graphA", "graphB"].map((name) => ({
+        id: name,
+        target: { root: { kind: "binding" as const, name }, segments: [] },
+        configuration: {
+          kind: "graph" as const,
+          representation: "adjacency-list" as const,
+          directed: false,
+        },
+      })),
+    };
+
+    const scene = compileScene(
+      frame,
+      new ProjectionRegistry([], contracts, frame.locals),
+    );
+
+    expect(scene.focusedGraphVertexIds).toEqual(["graph-a:vertex:0"]);
+  });
+
+  it("does not guess graph focus for an unscoped scalar with multiple graphs", () => {
+    const graphA: SerializedValue = {
+      kind: "sequence",
+      id: "graph-a",
+      type: "list",
+      items: [row("graph-a-row-0", [1]), row("graph-a-row-1", [0])],
+    };
+    const graphB: SerializedValue = {
+      kind: "sequence",
+      id: "graph-b",
+      type: "list",
+      items: [row("graph-b-row-0", [1]), row("graph-b-row-1", [0])],
+    };
+    const frame: TraceFrame = {
+      index: 13,
+      event: "line",
+      source: { line: 10 },
+      functionName: "walk",
+      scopeId: "walk:3",
+      depth: 1,
+      callStack: [],
+      locals: { graphA, graphB, neighbor: scalar(1) },
+      stdout: "",
+      changes: [],
+      semanticEvents: [{
+        kind: "call",
+        source: { line: 10 },
+        expression: "visited.add(neighbor)",
+        callee: "visited.add",
+        argumentExpressions: ["neighbor"],
+        arguments: [scalar(1)],
+        result: scalar(null),
+      }],
+    };
+    const contracts: ProjectionContractsV1 = {
+      version: 1,
+      declarations: ["graphA", "graphB"].map((name) => ({
+        id: name,
+        target: { root: { kind: "binding" as const, name }, segments: [] },
+        configuration: {
+          kind: "graph" as const,
+          representation: "adjacency-list" as const,
+          directed: false,
+        },
+      })),
+    };
+
+    const scene = compileScene(
+      frame,
+      new ProjectionRegistry([], contracts, frame.locals),
+    );
+
+    expect(scene.focusedGraphVertexIds).toEqual([]);
+  });
+
+  it("keeps the single-graph fallback when multiple bindings alias it", () => {
+    const graph: SerializedValue = {
+      kind: "sequence",
+      id: "aliased-graph",
+      type: "list",
+      items: [row("aliased-row-0", [1]), row("aliased-row-1", [0])],
+    };
+    const frame: TraceFrame = {
+      index: 14,
+      event: "line",
+      source: { line: 11 },
+      functionName: "walk",
+      scopeId: "walk:4",
+      depth: 1,
+      callStack: [],
+      locals: { graph, graphAlias: graph, neighbor: scalar(1) },
+      stdout: "",
+      changes: [],
+      semanticEvents: [{
+        kind: "call",
+        source: { line: 11 },
+        expression: "visited.add(neighbor)",
+        callee: "visited.add",
+        argumentExpressions: ["neighbor"],
+        arguments: [scalar(1)],
+        result: scalar(null),
+      }],
+    };
+    const contracts: ProjectionContractsV1 = {
+      version: 1,
+      declarations: ["graph", "graphAlias"].map((name) => ({
+        id: name,
+        target: { root: { kind: "binding" as const, name }, segments: [] },
+        configuration: {
+          kind: "graph" as const,
+          representation: "adjacency-list" as const,
+          directed: false,
+        },
+      })),
+    };
+
+    const scene = compileScene(
+      frame,
+      new ProjectionRegistry([], contracts, frame.locals),
+    );
+
+    expect(scene.focusedGraphVertexIds).toEqual(["aliased-graph:vertex:1"]);
   });
 
   it("derives an identity graph from nested object references", () => {

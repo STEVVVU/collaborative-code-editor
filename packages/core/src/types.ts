@@ -44,10 +44,16 @@ export interface ProjectionMapKeySegment {
   key: ScalarValue;
 }
 
+/** Selects each immediate value contained by a sequence, set, mapping, or object. */
+export interface ProjectionEachSegment {
+  kind: "each";
+}
+
 export type ProjectionTargetSegment =
   | ProjectionFieldSegment
   | ProjectionIndexSegment
-  | ProjectionMapKeySegment;
+  | ProjectionMapKeySegment
+  | ProjectionEachSegment;
 
 export interface ProjectionTarget {
   root: ProjectionBindingRoot;

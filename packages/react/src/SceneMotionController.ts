@@ -148,11 +148,13 @@ export function useSceneMotion(
   plan: SceneMotionPlan | undefined,
   viewKey = "overview",
   viewDurationMs = 480,
+  snapshotContextKey?: string | number,
 ): void {
   const previousSnapshotRef = useRef<Map<string, MotionSnapshot>>(new Map());
   const previousFrameIndexRef = useRef<number | undefined>(undefined);
   const previousPlanRef = useRef<SceneMotionPlan | undefined>(undefined);
   const previousViewKeyRef = useRef(viewKey);
+  const previousSnapshotContextKeyRef = useRef(snapshotContextKey);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -167,10 +169,13 @@ export function useSceneMotion(
     const previousFrameIndex = previousFrameIndexRef.current;
     const previousPlan = previousPlanRef.current;
     const previousViewKey = previousViewKeyRef.current;
+    const snapshotContextChanged =
+      previousSnapshotContextKeyRef.current !== snapshotContextKey;
     previousSnapshotRef.current = currentSnapshot;
     previousFrameIndexRef.current = frameIndex;
     previousPlanRef.current = plan;
     previousViewKeyRef.current = viewKey;
+    previousSnapshotContextKeyRef.current = snapshotContextKey;
 
     const frameDistance =
       previousFrameIndex === undefined || frameIndex === undefined
@@ -213,7 +218,9 @@ export function useSceneMotion(
             }],
           }
         : undefined;
-    const activePlan = viewPlan ?? semanticPlan;
+    const activePlan = snapshotContextChanged
+      ? undefined
+      : viewPlan ?? semanticPlan;
 
     if (
       previousSnapshot.size === 0 ||
@@ -287,5 +294,5 @@ export function useSceneMotion(
         target.style.opacity = opacity;
       });
     };
-  }, [frameIndex, plan, rootRef, viewDurationMs, viewKey]);
+  }, [frameIndex, plan, rootRef, snapshotContextKey, viewDurationMs, viewKey]);
 }

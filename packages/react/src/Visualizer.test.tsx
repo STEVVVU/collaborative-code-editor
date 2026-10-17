@@ -1,5 +1,9 @@
-import { compileScene, type TraceFrame } from "@traceframe/core";
-import { act, render, screen } from "@testing-library/react";
+import {
+  compileScene,
+  type SceneProjection,
+  type TraceFrame,
+} from "@traceframe/core";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Visualizer } from "./Visualizer";
@@ -134,6 +138,124 @@ describe("Visualizer primitive operations", () => {
     ).toMatch(
       /\.operation-list[\s\S]*?height: 25px;[\s\S]*?max-height: 25px;[\s\S]*?overflow: hidden;/,
     );
+  });
+
+  it("resolves an exact detail occurrence before an earlier alias with the same key", () => {
+    const graph = (label: string): SceneProjection => ({
+      kind: "graph",
+      key: "shared-graph",
+      label,
+      type: "list",
+      layout: "tree",
+      directed: false,
+      rootId: "vertex-0",
+      vertices: [{
+        id: "vertex-0",
+        label: "0",
+        value: scalar(0),
+        adjacency: scalar(0),
+      }],
+      edges: [],
+    });
+    const mapping = (
+      key: string,
+      label: string,
+      value: SceneProjection,
+    ): SceneProjection => ({
+      kind: "mapping",
+      key,
+      label,
+      type: "dict",
+      entries: [{
+        key: {
+          kind: "scalar",
+          key: `${key}-field`,
+          label: "graph",
+          type: "str",
+          value: "graph",
+        },
+        value,
+      }],
+    });
+    const scene = compileScene(frame([]));
+    scene.variables = [
+      {
+        name: "alias",
+        projection: mapping("alias", "alias", graph("earlier alias graph")),
+        changed: false,
+        changeCount: 0,
+      },
+      {
+        name: "state",
+        projection: mapping("state", "state", graph("target state graph")),
+        changed: false,
+        changeCount: 0,
+      },
+    ];
+
+    render(<Visualizer scene={scene} loading={false} statusText="" />);
+    fireEvent.click(screen.getByRole("button", { name: "Inspect state" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open details for target state graph" }),
+    );
+
+    expect(screen.getByLabelText("Value detail path"))
+      .toHaveTextContent("target state graph");
+  });
+
+  it("returns from value detail when the attention session changes", () => {
+    const scene = compileScene(frame([]));
+    const projection: SceneProjection = {
+      kind: "sequence",
+      key: "session-value",
+      label: "items",
+      type: "list",
+      items: [scalar(1)],
+    };
+    scene.variables = [{ name: "items", projection, changed: false, changeCount: 0 }];
+    const { rerender, container } = render(
+      <Visualizer scene={scene} loading={false} statusText="" attentionSessionId="session-a" />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inspect items" }));
+    expect(container.querySelector('[aria-label="Value detail path"]')).not.toBeNull();
+    rerender(
+      <Visualizer scene={scene} loading={false} statusText="" attentionSessionId="session-b" />,
+    );
+    expect(container.querySelector('[aria-label="Value detail path"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Context values"]')).not.toBeNull();
+  });
+
+  it("keeps object relationships collapsed until requested and resets expansion per session", () => {
+    const scene = compileScene(frame([]));
+    const node: SceneProjection = {
+      kind: "object", key: "entity", label: "node", type: "Node", fields: [],
+    };
+    scene.variables = [{ name: "node", projection: node, changed: false, changeCount: 0 }];
+    scene.relationGraph = {
+      layout: "tree",
+      roots: ["entity"],
+      entities: [{ id: "entity", type: "Node", label: "node", projection: node as Extract<SceneProjection, { kind: "object" }> }],
+      edges: [],
+    };
+    const { rerender, container } = render(
+      <Visualizer scene={scene} loading={false} statusText="" attentionSessionId="tree-run-a" />,
+    );
+
+    expect(container.querySelector('[aria-label="Working state"]')).not.toBeNull();
+    expect(container.querySelector(".relation-viewport")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand object relationships" }));
+    expect(container.querySelector(".relation-viewport")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse object relationships" }));
+    expect(container.querySelector(".relation-viewport")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand object relationships" }));
+    expect(container.querySelector(".relation-viewport")).not.toBeNull();
+
+    rerender(
+      <Visualizer scene={scene} loading={false} statusText="" attentionSessionId="tree-run-b" />,
+    );
+    expect(container.querySelector(".relation-viewport")).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand object relationships" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("does not surface literal-only iterator setup as an equation", () => {

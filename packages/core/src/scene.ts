@@ -885,31 +885,55 @@ function resolveContractTarget(
   bindings: Record<string, SerializedValue>,
   root: string,
   segments: ProjectionTargetSegment[],
-): SerializedValue | undefined {
-  let current: SerializedValue | undefined = bindings[root];
+): SerializedValue[] {
+  let current = bindings[root] ? [bindings[root]] : [];
   for (const segment of segments) {
-    if (!current) {
-      return undefined;
-    }
-    if (segment.kind === "field") {
-      current = current.kind === "object" ? current.fields[segment.name] : undefined;
-      continue;
-    }
-    if (segment.kind === "index") {
-      current =
-        current.kind === "sequence" || current.kind === "set"
-          ? current.items[segment.index]
-          : undefined;
-      continue;
-    }
-    if (current.kind !== "mapping") {
-      return undefined;
-    }
-    current = current.entries.find(([key]) =>
-      scalarValuesEqual(key, segment.key)
-    )?.[1];
+    current = current.flatMap((value): SerializedValue[] => {
+      if (segment.kind === "each") {
+        if (value.kind === "sequence" || value.kind === "set") {
+          return value.items;
+        }
+        if (value.kind === "mapping") {
+          return value.entries.map(([, item]) => item);
+        }
+        if (value.kind === "object") {
+          return Object.values(value.fields);
+        }
+        return [];
+      }
+      if (segment.kind === "field") {
+        return value.kind === "object" && value.fields[segment.name]
+          ? [value.fields[segment.name]]
+          : [];
+      }
+      if (segment.kind === "index") {
+        const item =
+          value.kind === "sequence" || value.kind === "set"
+            ? value.items[segment.index]
+            : undefined;
+        return item ? [item] : [];
+      }
+      if (value.kind !== "mapping") {
+        return [];
+      }
+      const item = value.entries.find(([key]) =>
+        scalarValuesEqual(key, segment.key)
+      )?.[1];
+      return item ? [item] : [];
+    });
   }
-  return current;
+  const seenIdentities = new Set<string>();
+  return current.filter((value) => {
+    const identity = valueIdentity(value);
+    if (!identity) {
+      return true;
+    }
+    if (seenIdentities.has(identity)) {
+      return false;
+    }
+    seenIdentities.add(identity);
+    return true;
+  });
 }
 
 function resolveGraphConfigurations(
@@ -928,24 +952,24 @@ function resolveGraphConfigurations(
   >();
   const invalidTargets: SerializedValue[] = [];
   for (const declaration of contracts?.declarations ?? []) {
-    const target = resolveContractTarget(
+    const targets = resolveContractTarget(
       bindings,
       declaration.target.root.name,
       declaration.target.segments,
     );
-    const identity = valueIdentity(target);
-    if (!identity) {
-      if (target) {
+    for (const target of targets) {
+      const identity = valueIdentity(target);
+      if (!identity) {
         invalidTargets.push(target);
+        continue;
       }
-      continue;
+      const declarations = declarationsByIdentity.get(identity) ?? [];
+      declarations.push({
+        id: declaration.id,
+        configuration: declaration.configuration,
+      });
+      declarationsByIdentity.set(identity, declarations);
     }
-    const declarations = declarationsByIdentity.get(identity) ?? [];
-    declarations.push({
-      id: declaration.id,
-      configuration: declaration.configuration,
-    });
-    declarationsByIdentity.set(identity, declarations);
   }
 
   const configurations = new Map<string, GraphProjectionConfiguration>();
@@ -2028,6 +2052,8 @@ function graphOperationFocus(
   variables: SceneVariable[],
   events: SemanticEvent[],
   changes: ValueChange[],
+  focusPaths: string[],
+  locationPaths: Map<string, string>,
 ): string[] {
   const identities = activeScalarIdentities(events, changes);
   variables.forEach((variable) => {
@@ -2039,15 +2065,19 @@ function graphOperationFocus(
   });
   const focused = new Set<string>();
 
+  const graphs = new Map<string, { graph: GraphProjection; path?: string }>();
+
   const visit = (projection: SceneProjection): void => {
     if (projection.kind === "graph") {
+      if (!graphs.has(projection.key)) {
+        graphs.set(projection.key, {
+          graph: projection,
+          path: locationPaths.get(
+            runtimeLocationId({ kind: "identity", objectId: projection.key }),
+          ),
+        });
+      }
       projection.vertices.forEach((vertex) => {
-        if (
-          vertex.value.kind === "scalar" &&
-          identities.has(`${vertex.value.type}:${vertex.value.value}`)
-        ) {
-          focused.add(vertex.id);
-        }
         visit(vertex.adjacency);
       });
       return;
@@ -2073,6 +2103,79 @@ function graphOperationFocus(
   };
 
   variables.forEach((variable) => visit(variable.projection));
+
+  const scopedGraphs = new Map<string, Set<number>>();
+  const graphPaths = [...graphs.entries()].flatMap(([key, entry]) =>
+    entry.path === undefined ? [] : [{ key, path: entry.path }],
+  );
+  const scopePath = (path: string): void => {
+    for (const { key, path: graphPath } of graphPaths) {
+      if (
+        path !== graphPath &&
+        !path.startsWith(`${graphPath}[`) &&
+        !path.startsWith(`${graphPath}{`)
+      ) {
+        continue;
+      }
+      const suffix = path.slice(graphPath.length);
+      const sequenceIndex = /^\[(-?\d+)\]/.exec(suffix);
+      const mappingIndex = /^\{(\d+)\}\.value/.exec(suffix);
+      const index = sequenceIndex
+        ? Number(sequenceIndex[1])
+        : mappingIndex
+          ? Number(mappingIndex[1])
+          : undefined;
+      const entry = graphs.get(key)!;
+      if (index !== undefined && entry.graph.vertices[index]) {
+        const indexes = scopedGraphs.get(key) ?? new Set<number>();
+        indexes.add(index);
+        scopedGraphs.set(key, indexes);
+      } else if (suffix === "") {
+        scopedGraphs.set(key, new Set());
+      }
+    }
+  };
+  focusPaths.forEach(scopePath);
+  events.forEach((event) => {
+    [event.location, ...(event.sourceLocations ?? [])].forEach((location) => {
+      if (!location) {
+        return;
+      }
+      const path = locationPaths.get(runtimeLocationId(location));
+      if (path !== undefined) {
+        scopePath(path);
+      }
+    });
+  });
+  changes.forEach((change) => {
+    scopePath(change.path);
+    if (change.location) {
+      const path = locationPaths.get(runtimeLocationId(change.location));
+      if (path !== undefined) {
+        scopePath(path);
+      }
+    }
+  });
+
+  const hasExplicitGraphScope = scopedGraphs.size > 0;
+  const allowUnscopedFallback = !hasExplicitGraphScope && graphs.size === 1;
+  graphs.forEach(({ graph }, key) => {
+    const scopedIndexes = scopedGraphs.get(key);
+    if (!allowUnscopedFallback && !scopedIndexes) {
+      return;
+    }
+    graph.vertices.forEach((vertex, index) => {
+      if (
+        (scopedIndexes === undefined ||
+          scopedIndexes.size === 0 ||
+          scopedIndexes.has(index)) &&
+        vertex.value.kind === "scalar" &&
+        identities.has(`${vertex.value.type}:${vertex.value.value}`)
+      ) {
+        focused.add(vertex.id);
+      }
+    });
+  });
   return [...focused];
 }
 
@@ -2319,11 +2422,10 @@ function buildRelationGraph(variables: SceneVariable[]): RelationGraph | undefin
   };
 }
 
-export function compileScene(
+export function projectSceneVariables(
   frame: TraceFrame,
   registry = new ProjectionRegistry(),
-  executionState: ExecutionState = materializeExecutionState(frame),
-): VisualScene {
+): SceneVariable[] {
   frame.ancestorScopes?.forEach((scope) => {
     registry.observeBindings(scope.locals);
   });
@@ -2367,6 +2469,15 @@ export function compileScene(
       changeCount: 1,
     });
   }
+  return variables;
+}
+
+export function compileScene(
+  frame: TraceFrame,
+  registry = new ProjectionRegistry(),
+  executionState: ExecutionState = materializeExecutionState(frame),
+): VisualScene {
+  const variables = projectSceneVariables(frame, registry);
   const contextVariables: SceneVariable[] =
     frame.ancestorScopes?.flatMap((scope) =>
       Object.entries(scope.locals).map(([name, value]) => ({
@@ -2450,6 +2561,8 @@ export function compileScene(
     variables,
     frame.semanticEvents,
     frame.changes,
+    focusPaths,
+    locationPaths,
   );
   const memberships = graphMemberships(variables);
   const motionPlan = compileMotionPlan(causalLinks, frame.semanticEvents);

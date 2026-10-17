@@ -248,7 +248,10 @@ describe("trace replay files", () => {
           version: 1 as const,
           declarations: [{
             id: "graph",
-            target: { root: { kind: "binding" as const, name: "graph" }, segments: [] },
+            target: {
+              root: { kind: "binding" as const, name: "graph" },
+              segments: [{ kind: "each" as const }],
+            },
             configuration: {
               kind: "graph" as const,
               representation: "adjacency-list" as const,

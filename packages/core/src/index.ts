@@ -4,6 +4,7 @@ export * from "./executionModel";
 export * from "./callLens";
 export * from "./locations";
 export * from "./lenses";
+export * from "./attention";
 export * from "./traceUpgrade";
 export * from "./motion";
 export * from "./replay";

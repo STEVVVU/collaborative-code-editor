@@ -1,24 +1,37 @@
-import { Boxes, Braces, Grid3X3, List, Network, ScanText } from "lucide-react";
-import { useEffect, useState, type CSSProperties } from "react";
+import {
+  Boxes,
+  Braces,
+  ChevronDown,
+  ChevronRight,
+  Grid3X3,
+  List,
+  Network,
+  ScanText,
+} from "lucide-react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import type {
   GraphMembership,
   VariableMarker,
   SceneProjection,
 } from "@traceframe/core";
 import { GraphProjectionView } from "./GraphProjectionView";
+import { ProjectionPreview } from "./ProjectionPreview";
 import { useTraceframeRendererConfig } from "./TraceframeProvider";
 
 export interface ProjectionViewProps {
   projection: SceneProjection;
   changed?: boolean;
   depth?: number;
+  /** Retained for compatibility with hosts that open a projection in detail view. */
   expanded?: boolean;
   path?: string;
   focusPaths?: readonly string[];
   variableMarkers?: readonly VariableMarker[];
   focusedGraphVertexIds?: readonly string[];
   graphMemberships?: readonly GraphMembership[];
-  onInspect?: (projection: SceneProjection) => void;
+  onInspect?: (projection: SceneProjection, path?: string) => void;
+  presentation?: "full" | "thumbnail";
+  childPresentation?: "full" | "thumbnail";
 }
 
 function escapedPath(path: string): string {
@@ -50,33 +63,18 @@ function VariableMarkerLabel({
 function nestedSummary(projection: SceneProjection): string {
   switch (projection.kind) {
     case "sequence":
-      return `${projection.items.length}`;
+      return `${projection.items.length} items`;
     case "grid":
-      return `${projection.rows.length}x${projection.rows[0]?.length ?? 0}`;
+      return `${projection.rows.length} × ${projection.rows[0]?.length ?? 0}`;
     case "graph":
-      return `${projection.vertices.length}`;
+      return `${projection.vertices.length} vertices`;
     case "mapping":
-      return `${projection.entries.length}`;
+      return `${projection.entries.length} entries`;
     case "object":
-      return `${projection.fields.length}`;
+      return `${projection.fields.length} fields`;
     default:
       return "";
   }
-}
-
-function nestedInspectLabel(projection: SceneProjection): string {
-  const summary = nestedSummary(projection);
-  const unit =
-    projection.kind === "object"
-      ? "fields"
-      : projection.kind === "graph"
-        ? "vertices"
-      : projection.kind === "mapping"
-        ? "entries"
-        : projection.kind === "grid"
-          ? "cells"
-          : "items";
-  return `Inspect ${projection.label}: ${projection.type}, ${summary} ${unit}`;
 }
 
 function ProjectionIcon({ kind }: { kind: SceneProjection["kind"] }) {
@@ -98,6 +96,69 @@ function ProjectionIcon({ kind }: { kind: SceneProjection["kind"] }) {
   }
 }
 
+function ProjectionShell({
+  projection,
+  path,
+  collapsed,
+  focused,
+  onToggle,
+  onInspect,
+  children,
+}: {
+  projection: SceneProjection;
+  path: string;
+  collapsed: boolean;
+  focused: boolean;
+  onToggle: () => void;
+  onInspect?: (projection: SceneProjection, path?: string) => void;
+  children: ReactNode;
+}) {
+  const description = `${projection.label}: ${projection.type}, ${nestedSummary(projection)}`;
+  return (
+    <section
+      aria-label={description}
+      className={`projection-shell kind-${projection.kind} ${
+        collapsed ? "collapsed" : ""
+      } ${focused ? "focused" : ""}`}
+      data-motion-key={projection.key}
+      data-motion-anchor="container"
+      data-projection-path={path}
+    >
+      <header className="projection-shell-header">
+        <button
+          aria-expanded={!collapsed}
+          aria-label={`${collapsed ? "Expand" : "Collapse"} ${projection.label}`}
+          className="projection-shell-toggle"
+          onClick={onToggle}
+          type="button"
+        >
+          {collapsed ? (
+            <ChevronRight size={13} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={13} aria-hidden="true" />
+          )}
+          <ProjectionIcon kind={projection.kind} />
+          <span className="projection-shell-label">{projection.label}</span>
+          <span className="projection-shell-type">{projection.type}</span>
+          <span className="projection-shell-summary">{nestedSummary(projection)}</span>
+        </button>
+        {onInspect && (
+          <button
+            aria-label={`Open details for ${projection.label}`}
+            className="projection-shell-inspect"
+            onClick={() => onInspect(projection, path)}
+            title={`Open details for ${projection.label}`}
+            type="button"
+          >
+            <ScanText size={13} aria-hidden="true" />
+          </button>
+        )}
+      </header>
+      {!collapsed && <div className="projection-shell-content">{children}</div>}
+    </section>
+  );
+}
+
 export function ProjectionView({
   projection,
   changed = false,
@@ -109,8 +170,16 @@ export function ProjectionView({
   focusedGraphVertexIds = [],
   graphMemberships = [],
   onInspect,
+  presentation = "full",
+  childPresentation = "full",
 }: ProjectionViewProps) {
   const rendererConfig = useTraceframeRendererConfig();
+  const [collapseState, setCollapseState] = useState({
+    key: projection.key,
+    collapsed: false,
+  });
+  const collapsed =
+    collapseState.key === projection.key && collapseState.collapsed;
   const [retainedGraph, setRetainedGraph] = useState(
     projection.kind === "graph" ? projection : undefined,
   );
@@ -119,29 +188,22 @@ export function ProjectionView({
       setRetainedGraph(projection);
       return;
     }
-    if (!retainedGraph) {
-      return;
-    }
+    if (!retainedGraph) return;
     const timeout = window.setTimeout(
       () => setRetainedGraph(undefined),
       rendererConfig.motionDurationMs,
     );
     return () => window.clearTimeout(timeout);
-  }, [
-    projection,
-    rendererConfig.motionDurationMs,
-    retainedGraph,
-  ]);
+  }, [projection, rendererConfig.motionDurationMs, retainedGraph]);
   const focused = focusPaths.includes(path);
+  if (presentation === "thumbnail" && projection.kind !== "scalar" && projection.kind !== "reference" && projection.kind !== "truncated") {
+    return <ProjectionPreview projection={projection} onInspect={onInspect} path={path} />;
+  }
   const graphProjection =
     projection.kind === "graph"
       ? projection
       : retainedGraph
-        ? {
-            ...retainedGraph,
-            edges: [],
-            vertices: [],
-          }
+        ? { ...retainedGraph, edges: [], vertices: [] }
         : undefined;
 
   if (projection.kind === "scalar") {
@@ -156,7 +218,6 @@ export function ProjectionView({
       </span>
     );
   }
-
   if (projection.kind === "reference") {
     return (
       <span className="reference-value" data-motion-key={projection.key}>
@@ -165,7 +226,6 @@ export function ProjectionView({
       </span>
     );
   }
-
   if (projection.kind === "truncated") {
     return (
       <span className="truncated-value" data-motion-key={projection.key}>
@@ -174,47 +234,20 @@ export function ProjectionView({
     );
   }
 
-  if (depth > 0 && !expanded) {
-    const summary =
-      projection.kind === "sequence"
-        ? `[${nestedSummary(projection)}]`
-        : projection.kind === "mapping"
-          ? `{${nestedSummary(projection)}}`
-          : projection.kind === "object"
-            ? projection.type.split(".").at(-1) ?? projection.type
-            : nestedSummary(projection);
-    const content = <span>{summary}</span>;
-    if (onInspect) {
-      return (
-        <button
-          aria-label={nestedInspectLabel(projection)}
-          className={`nested-projection-token kind-${projection.kind} ${
-            focused ? "focused" : ""
-          }`}
-          data-motion-key={projection.key}
-          data-projection-path={path}
-          data-motion-anchor="container"
-          onClick={() => onInspect(projection)}
-          title={nestedInspectLabel(projection)}
-          type="button"
-        >
-          {content}
-        </button>
-      );
-    }
-    return (
-      <span
-        className={`nested-projection-token kind-${projection.kind} ${
-          focused ? "focused" : ""
-        }`}
-        data-motion-key={projection.key}
-        data-projection-path={path}
-        data-motion-anchor="container"
-      >
-        {content}
-      </span>
-    );
-  }
+  const container = (body: ReactNode) => (
+    <ProjectionShell
+      projection={projection}
+      path={path}
+      collapsed={collapsed}
+      focused={focused}
+      onToggle={() =>
+        setCollapseState({ key: projection.key, collapsed: !collapsed })
+      }
+      onInspect={onInspect}
+    >
+      {body}
+    </ProjectionShell>
+  );
 
   if (projection.kind === "sequence") {
     const markers = variableMarkers.flatMap((marker) => {
@@ -222,16 +255,19 @@ export function ProjectionView({
         .exec(marker.path);
       return match ? [{ marker, index: Number(match[1]) }] : [];
     });
-    return (
+    const sequenceStyle = {
+      "--sequence-count": Math.max(projection.items.length, 1),
+    } as CSSProperties;
+    return container(
       <div
         className={`sequence-view ${changed ? "changed" : ""}`}
-        data-motion-key={projection.key}
+        style={sequenceStyle}
       >
         {markers.map(({ marker, index }) => (
           <VariableMarkerLabel
             key={marker.id}
             marker={marker}
-            style={{ left: 29 + index * 54, top: 2 }}
+            style={{ gridColumn: index + 1, gridRow: 1, left: "50%", top: 2 }}
           />
         ))}
         {projection.items.map((item, index) => (
@@ -239,28 +275,30 @@ export function ProjectionView({
             className={`sequence-cell tf-enter ${focusPaths.includes(`${path}[${index}]`) ? "focused" : ""}`}
             data-projection-path={`${path}[${index}]`}
             data-motion-anchor="container"
+            style={{ gridColumn: index + 1, gridRow: 2 }}
             key={item.key}
           >
             <span className="cell-index">{index}</span>
             <ProjectionView
               projection={item}
               depth={depth + 1}
-              expanded={false}
               path={`${path}[${index}]`}
               focusPaths={focusPaths}
               variableMarkers={variableMarkers}
               focusedGraphVertexIds={focusedGraphVertexIds}
               graphMemberships={graphMemberships}
               onInspect={onInspect}
+              presentation={childPresentation}
+              childPresentation={childPresentation}
             />
           </div>
         ))}
-      </div>
+      </div>,
     );
   }
 
   if (graphProjection) {
-    return (
+    return container(
       <GraphProjectionView
         projection={graphProjection}
         focusPaths={focusPaths}
@@ -269,7 +307,8 @@ export function ProjectionView({
         memberships={graphMemberships}
         path={path}
         onInspect={onInspect}
-      />
+        embedded
+      />,
     );
   }
 
@@ -300,10 +339,9 @@ export function ProjectionView({
     const style = {
       "--grid-columns": projection.rows[0]?.length || 1,
     } as CSSProperties;
-    return (
+    return container(
       <div
         className={`grid-view ${changed ? "changed" : ""}`}
-        data-motion-key={projection.key}
         style={style}
       >
         {markers.map(({ marker, row, column, rowBinding }) => (
@@ -312,10 +350,10 @@ export function ProjectionView({
             key={marker.id}
             marker={marker}
             style={{
-              left: rowBinding ? 27 : 83 + column * 54,
-              top: rowBinding
-                ? 51 + row * 54
-                : 2 + row * 54,
+              gridColumn: column + 1,
+              gridRow: row + 1,
+              left: rowBinding ? -31 : "50%",
+              top: rowBinding ? "50%" : 2,
             }}
           />
         ))}
@@ -323,10 +361,16 @@ export function ProjectionView({
           row.map((item, columnIndex) => (
             <div
               className={`grid-cell tf-enter ${
-                focusPaths.includes(`${path}[${rowIndex}][${columnIndex}]`) ? "focused" : ""
+                focusPaths.includes(`${path}[${rowIndex}][${columnIndex}]`)
+                  ? "focused"
+                  : ""
               }`}
               data-projection-path={`${path}[${rowIndex}][${columnIndex}]`}
               data-motion-anchor="container"
+              style={{
+                gridColumn: columnIndex + 1,
+                gridRow: rowIndex + 1,
+              }}
               key={item.key}
             >
               <span className="grid-index">
@@ -335,18 +379,19 @@ export function ProjectionView({
               <ProjectionView
                 projection={item}
                 depth={depth + 1}
-                expanded={false}
                 path={`${path}[${rowIndex}][${columnIndex}]`}
                 focusPaths={focusPaths}
                 variableMarkers={variableMarkers}
                 focusedGraphVertexIds={focusedGraphVertexIds}
                 graphMemberships={graphMemberships}
                 onInspect={onInspect}
+                presentation={childPresentation}
+                childPresentation={childPresentation}
               />
             </div>
           )),
         )}
-      </div>
+      </div>,
     );
   }
 
@@ -356,11 +401,8 @@ export function ProjectionView({
         .exec(marker.path);
       return match ? [{ marker, index: Number(match[1]) }] : [];
     });
-    return (
-      <div
-        className={`mapping-view ${changed ? "changed" : ""}`}
-        data-motion-key={projection.key}
-      >
+    return container(
+      <div className={`mapping-view ${changed ? "changed" : ""}`}>
         {projection.entries.map((entry, index) => (
           <div className="mapping-row tf-enter" key={entry.key.key}>
             {markers
@@ -375,84 +417,65 @@ export function ProjectionView({
                   {marker.label}
                 </span>
               ))}
-            <div
-              className={`mapping-key ${
-                focusPaths.includes(`${path}{${index}}.key`) ? "focused" : ""
-              }`}
-            >
+            <div className={`mapping-key ${focusPaths.includes(`${path}{${index}}.key`) ? "focused" : ""}`}>
               <ProjectionView
                 projection={entry.key}
                 depth={depth + 1}
-                expanded={false}
                 path={`${path}{${index}}.key`}
                 focusPaths={focusPaths}
                 variableMarkers={variableMarkers}
                 focusedGraphVertexIds={focusedGraphVertexIds}
                 graphMemberships={graphMemberships}
                 onInspect={onInspect}
+                presentation={childPresentation}
+                childPresentation={childPresentation}
               />
             </div>
-            <div
-              className={`mapping-value ${
-                focusPaths.includes(`${path}{${index}}.value`) ? "focused" : ""
-              }`}
-            >
+            <div className={`mapping-value ${focusPaths.includes(`${path}{${index}}.value`) ? "focused" : ""}`}>
               <ProjectionView
                 projection={entry.value}
                 depth={depth + 1}
-                expanded={false}
                 path={`${path}{${index}}.value`}
                 focusPaths={focusPaths}
                 variableMarkers={variableMarkers}
                 focusedGraphVertexIds={focusedGraphVertexIds}
                 graphMemberships={graphMemberships}
                 onInspect={onInspect}
+                presentation={childPresentation}
+                childPresentation={childPresentation}
               />
             </div>
           </div>
         ))}
-      </div>
+      </div>,
     );
   }
 
   if (projection.kind === "object") {
-    if (depth === 0 && !expanded && onInspect) {
-      return (
-        <button
-          className={`object-token ${changed ? "changed" : ""}`}
-          data-motion-key={projection.key}
-          onClick={() => onInspect(projection)}
-          type="button"
-        >
-          <span>
-            <strong>{projection.type}</strong>
-            <small>{projection.fields.length} fields</small>
-          </span>
-        </button>
-      );
-    }
-    return (
-      <div className="object-fields" data-motion-key={projection.key}>
+    return container(
+      <div className="object-fields">
         {projection.fields.map((field) => (
           <div className="object-field tf-enter" key={field.name}>
             <span className="field-name">{field.name}</span>
             <ProjectionView
               projection={field.value}
               depth={depth + 1}
-              expanded={false}
               path={`${path}.${field.name}`}
               focusPaths={focusPaths}
               variableMarkers={variableMarkers}
               focusedGraphVertexIds={focusedGraphVertexIds}
               graphMemberships={graphMemberships}
               onInspect={onInspect}
+              presentation={childPresentation}
+              childPresentation={childPresentation}
             />
           </div>
         ))}
-      </div>
+      </div>,
     );
   }
-
+  // `expanded` remains a supported host prop; recursive inline rendering is now the default.
+  void expanded;
   return null;
 }
 

@@ -17,7 +17,8 @@ interface GraphProjectionViewProps {
   focusedVertexIds?: readonly string[];
   memberships?: readonly GraphMembership[];
   path?: string;
-  onInspect?: (projection: SceneProjection) => void;
+  onInspect?: (projection: SceneProjection, path?: string) => void;
+  embedded?: boolean;
 }
 
 interface GraphNodeMotionData {
@@ -55,6 +56,7 @@ export function GraphProjectionView({
   memberships = [],
   path = projection.label,
   onInspect,
+  embedded = false,
 }: GraphProjectionViewProps) {
   const rendererConfig = useTraceframeRendererConfig();
   const nodeSize = rendererConfig.graphNodeSize;
@@ -113,7 +115,7 @@ export function GraphProjectionView({
   return (
     <div
       className="tf-root graph-viewport"
-      data-motion-key={projection.key}
+      data-motion-key={embedded ? undefined : projection.key}
       aria-label={`${projection.label}, ${projection.directed ? "directed" : "undirected"} ${projection.layout} with ${projection.vertices.length} vertices`}
       style={{
         "--tf-graph-node-size": `${nodeSize}px`,
@@ -190,7 +192,7 @@ export function GraphProjectionView({
             data-topology-id={node.id}
             data-topology-phase={node.phase}
             key={node.id}
-            onClick={() => onInspect?.(vertex.adjacency)}
+            onClick={() => onInspect?.(vertex.adjacency, `${path}[${index}]`)}
             style={{
               left: node.x - nodeSize / 2,
               opacity: node.opacity,

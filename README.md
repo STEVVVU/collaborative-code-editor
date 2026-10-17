@@ -40,6 +40,10 @@ Python source
 - `@traceframe/python` runs and traces Python in an isolated Pyodide worker.
 - `@traceframe/playground` is the proof application under `apps/playground`.
 
+The playground accepts a known example id in the `example` query parameter. Open
+`/?example=nested-graphs` for nested graph contracts, or `/?example=nested-bfs` for the same
+contract with live breadth-first-search distances and queues. Unknown ids use the default example.
+
 See [docs/architecture.md](docs/architecture.md) for the data model and
 [docs/api.md](docs/api.md) for embedding examples.
 
@@ -65,8 +69,10 @@ See [docs/architecture.md](docs/architecture.md) for the data model and
 - Relation graphs derived from object identity for linked structures and trees
 - Topology-aware tree and network layouts for explicitly contracted adjacency sequences and maps
 - Source-line highlighting, state diffs, output synchronization, playback, speed, and scrubbing
-- Recursive breadcrumb drill-down that expands one selected value layer at a time
-- Fixed-size semantic-zoom tokens for every nested container combination
+- A stable execution workspace with compact context views, generic read/change attention, and
+  pinning across nested containers
+- Token, thumbnail, and full detail levels for nested sequences, grids, mappings, objects, and graphs
+- Explicit nested graph views composed alongside their surrounding batches and state
 - Direct return-value projection without wrapper assignments or print statements
 - Versioned replay files for saving and reopening completed traces
 - Bubble sort, grid walk, linked list, binary-tree DFS, and BFS examples

@@ -129,6 +129,37 @@ describe("parseFunctionRunSpec", () => {
     })).toThrow("Conflicting projection contract target");
   });
 
+  it("validates each as a keyless contract path segment", () => {
+    const contracts = {
+      version: 1,
+      declarations: [{
+        id: "all-graphs",
+        target: {
+          root: { kind: "binding", name: "state" },
+          segments: [{ kind: "each" }],
+        },
+        configuration: {
+          kind: "graph",
+          representation: "adjacency-list",
+          directed: false,
+        },
+      }],
+    };
+
+    expect(parseFunctionRunSpec("solve", "[]", contracts))
+      .toMatchObject({ projectionContracts: contracts });
+    expect(() => parseFunctionRunSpec("solve", "[]", {
+      ...contracts,
+      declarations: [{
+        ...contracts.declarations[0],
+        target: {
+          ...contracts.declarations[0].target,
+          segments: [{ kind: "each", index: 0 }],
+        },
+      }],
+    })).toThrow("invalid each segment");
+  });
+
   it("compares projection targets without delimiter collisions", () => {
     const graphConfiguration = {
       kind: "graph",
