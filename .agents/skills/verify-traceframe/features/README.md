@@ -2,8 +2,10 @@
 
 | Feature | Driver | Status |
 | --- | --- | --- |
-| [Execution and timeline](execution.md) | `driveExecutionBaseline` | Must pass before product changes |
+| [Execution and timeline](execution.md) | `driveExecutionBaseline` | Baseline and post-change real Python drive passed |
 | Replay import/export | Existing file controls, manual CUA journey | Export availability checked; full file round trip requires a separate drive |
-| Projection inspection | Existing Inspect and view-level controls | Separate real-browser journey required after projection changes |
+| Projection inspection | `driveProjectionSwitch` after pinning graph in a BFS notebook | Graph/structure switch retains frames and replay |
+| [Shared notebooks](notebooks.md) | `createNotebookPeers`, `editNotebookPeers` | Real editor/viewer links, comment and three-tab updates |
+| Offline and restart | `editAndReloadOffline`, `verifyNotebookReconnection` | Two writers, offline reload, server restart, merged drafts, explicit local execution |
 
-Add notebook, sharing, offline and annotation entries when implemented. A plan or test fixture does not certify a user path.
+A plan or test fixture does not certify a user path. Browser evidence is local; hosted CI runs API, static, unit and experiment checks.

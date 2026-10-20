@@ -13,11 +13,11 @@ From the repository root, use supported Node 24 and `npm ci`, then `npm run buil
 node tools/verify-traceframe-server.mjs .audit/verification/baseline-001 5175
 ```
 
-Choose a fresh evidence directory and unused loopback port. This helper starts the real Vite app using the current Node executable, avoiding npm argument forwarding. Keep the terminal session handle for cleanup. Never attach verification to the user's existing session. The helper rejects an occupied port.
+Choose a fresh evidence directory and unused loopback port. This helper starts the real Vite app and a notebook API on that port plus 20 using the current Node executable. It keeps SQLite state in the ignored evidence directory and configures the proxy and allowed Origin. Keep the terminal session handle for cleanup. Never attach verification to the user's existing session. The helper rejects an occupied port.
 
 ## Doctor
 
-Read `launch.json` and the helper output. `doctor` must be true and the child must remain alive. The helper checks the actual app HTML on its owned port. Open that URL in a new background CUA browser tab. Wait for **Run code**, which indicates the initial real Pyodide trace completed. Python and Monaco may load public CDN assets on first use. A permanently loading runtime is a failed precondition, not a pass.
+Read `launch.json` and the helper output. `doctor` must be true and both children must remain alive. The helper checks the owned API and application endpoints. Open the base URL in a new background CUA browser tab. Wait for **Run code**, which indicates the initial real Pyodide trace completed. Python and Monaco may load public CDN assets on first use. A permanently loading runtime is a failed precondition, not a pass.
 
 ## Drive
 
@@ -34,12 +34,12 @@ Read [features/README.md](features/README.md) for mapped journeys. Keep unit, ty
 
 ## Evidence
 
-The directory retains `launch.json`, `server.log`, `browser-actions.json`, `browser-result.json`, `execution.png`, and `server-result.json`. Browser success requires `passed: true` and the expected final values. Runtime state and capabilities belong only in ignored storage. Never commit access tokens, private notebook contents or local databases.
+The directory retains `launch.json`, `server.log`, browser action/result files, screenshots, optional offline/online `transitions.json`, and `server-result.json`. Browser success requires `passed: true` and the expected final values. Runtime state and capabilities belong only in ignored storage. Never commit access tokens, private notebook contents or local databases.
 
 ## Cleanup
 
-Send Ctrl+C to the owned launch terminal. The helper stops its captured child and records `cleanup: true` after checking that its listener is unavailable. Confirm the process/session finished, then inspect `server-result.json`. Close the temporary verification tab unless it is a requested deliverable. Verify that the screenshot and action/result files still exist after cleanup.
+Send Ctrl+C to the owned launch terminal. The helper stops its captured children and records `cleanup: true` after checking that both listeners are unavailable. Confirm the process/session finished, then inspect `server-result.json`. Close the temporary verification tabs unless they are requested deliverables. Verify that screenshots and action/result files still exist after cleanup.
 
 ## Helpers
 
-`tools/verify-traceframe-server.mjs` handles Launch, Doctor, and Cleanup. `tools/verify-traceframe-browser.mjs` handles browser Drive and Evidence. Run existing `npm run check`, `npm test`, and `npm run build` separately. A mapped journey without a completed drive remains unverified.
+`tools/verify-traceframe-server.mjs` handles Launch, Doctor, and Cleanup. `tools/verify-traceframe-browser.mjs` and `tools/verify-notebook-browser.mjs` handle browser Drive and Evidence. Run `npm run check`, `npm test`, `npm run build`, `npm run experiment:annotations`, and `npm audit` separately. A mapped journey without a completed drive remains unverified.

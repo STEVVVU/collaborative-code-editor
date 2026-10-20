@@ -4,14 +4,45 @@ Traceframe is an interactive execution visualizer. It runs Python in a browser w
 versioned runtime state, compiles that state through generic projection rules, and synchronizes
 the result with editable source code, structured inputs, and timeline controls.
 
+Shared debugging notebooks add code co-editing over WebSockets, offline drafts in IndexedDB,
+SQLite persistence, separate editor/viewer links, and comments anchored to character identities.
+Python execution remains local and explicit; receiving shared code never starts a run.
+
+![Shared notebook with an anchored code comment and a completed local Python trace](docs/images/shared-notebook.png)
+
 ## Run locally
 
 ```powershell
-npm install
+npm ci
 npm run dev
 ```
 
 Open `http://127.0.0.1:5173`.
+
+Use Node 24.15 or newer in the 24.x line. The development command builds the packages, starts
+the loopback notebook service on port 5190, and proxies it through Vite. Press Ctrl+C to stop
+both owned processes. Notebook data is stored in the ignored `.traceframe/notebooks.sqlite`.
+
+## Review code together
+
+1. Open **Shared notebook**, give it a title, and choose **Create notebook from this code**.
+2. Copy an editor or viewer link. A link grants its stated access to anyone who possesses it.
+3. Editors can change code and run settings. Select code, write a comment, and attach it to the selection.
+4. Disconnect the notebook service and keep editing. The local draft survives a normal browser reload;
+   reconnecting merges it with the server document. Storage failures appear as errors.
+5. Press **Run code** to execute locally, then scrub the trace or save a replay. Remote edits invalidate
+   an outdated trace. Projection-only changes keep its frames.
+
+Editor/viewer capabilities are consumed from link fragments and kept in per-tab session storage.
+The service stores capability hashes. This is a local capability-based application without accounts
+or individual link revocation. Run only code you trust: a browser worker is not a network or resource
+security boundary. See [the protocol and limits](docs/notebook-protocol.md) before hosting elsewhere.
+
+The annotation experiment is inspired by [Peritext](https://www.inkandswitch.com/peritext/).
+It implements a bounded character-relative comment span policy on Yjs, rather than the full
+rich-text algorithm. Its seven named edits compare with fixed integer offsets, then check
+disconnected merge convergence and snapshot restoration. The product scope also follows the
+complete-application emphasis of [MIT 6.1040](https://61040-fa25.github.io/).
 
 ## Verification
 
@@ -19,7 +50,14 @@ Open `http://127.0.0.1:5173`.
 npm run check
 npm test
 npm run build
+npm run experiment:annotations
+npm audit
 ```
+
+The tests include actual HTTP/WebSocket peers and SQLite restart, as well as deterministic
+annotation, storage and client-state checks. The [browser verification skill](.agents/skills/verify-traceframe/SKILL.md)
+drives the real Pyodide application, sharing, offline reload, and explicit execution. Unit checks
+and rendered browser evidence are recorded separately.
 
 ## Packages
 
@@ -49,7 +87,7 @@ See [docs/architecture.md](docs/architecture.md) for the data model and
 
 ## Current scope
 
-- Editable Python with five structurally different examples
+- Editable Python with fourteen examples
 - Script runs and reusable function runs with independently editable JSON arguments
 - Top-level function and dotted class-method entrypoints
 - Generic tagged object-graph inputs for user-defined classes, sharing, and cycles
