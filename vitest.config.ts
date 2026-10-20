@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
-    exclude: ["e2e/**", "node_modules/**"],
+    exclude: ["e2e/**", "node_modules/**", "apps/notebook-server/**"],
     setupFiles: "./apps/playground/src/test/setup.ts",
   },
 });

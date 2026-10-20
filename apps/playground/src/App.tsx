@@ -1,4 +1,8 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
+import type { MonacoBinding } from "y-monaco";
+import { useNotebook } from "./notebook/useNotebook";
+import { notebookTypes } from "./notebook/document";
+import { NotebookPanel } from "./notebook/NotebookPanel";
 import {
   Activity,
   AlertTriangle,
@@ -31,6 +35,7 @@ import {
   ProjectionRegistry,
   runSpecArgumentsText,
   serializeReplay,
+  validateProjectionContracts,
   type DebuggerAdapter,
   type DebuggerStatus,
   type ExecutionTrace,
@@ -89,6 +94,83 @@ export default function App() {
   const highlightAnimationRef = useRef<Animation | null>(null);
   const highlightFrameRef = useRef<number | null>(null);
   const activeLineRef = useRef<number | undefined>(undefined);
+  const [mountedEditor, setMountedEditor] = useState<
+    Parameters<OnMount>[0] | null
+  >(null);
+  const executionVersion = useRef(0);
+  const notebook = useNotebook((code, settings) => {
+    const executionChanged =
+      code !== source ||
+      settings.mode !== runMode ||
+      settings.entrypoint !== entrypoint ||
+      settings.argumentsText !== argumentsText;
+    if (executionChanged) executionVersion.current++;
+    setSource(code);
+    setRunMode(settings.mode);
+    setEntrypoint(settings.entrypoint);
+    setArgumentsText(settings.argumentsText);
+    try {
+      const contracts: unknown = settings.projectionContracts
+        ? JSON.parse(settings.projectionContracts)
+        : undefined;
+      if (contracts !== undefined) validateProjectionContracts(contracts);
+      setProjectionContracts(contracts);
+      if (!executionChanged)
+        setTrace((current) =>
+          current
+            ? {
+                ...current,
+                runSpec: { ...current.runSpec, projectionContracts: contracts },
+              }
+            : current,
+        );
+    } catch {
+      setProjectionContracts(undefined);
+      setError(
+        "The shared projection settings are invalid. Fix them before running this notebook.",
+      );
+    }
+    setSelectedExample("custom");
+    if (executionChanged) {
+      setTrace(undefined);
+      setPlaying(false);
+      setFrameIndex(0);
+    }
+  });
+  const notebookReadOnly = Boolean(
+    notebook.client && notebook.state.role !== "edit",
+  );
+
+  useEffect(() => {
+    const client = notebook.client;
+    const model = mountedEditor?.getModel();
+    if (!client || !mountedEditor || !model || !notebook.state.role) return;
+    let cancelled = false;
+    let binding: MonacoBinding | undefined;
+    void import("y-monaco")
+      .then(({ MonacoBinding: Binding }) => {
+        if (!cancelled)
+          binding = new Binding(
+            notebookTypes(client.doc).source,
+            model,
+            new Set([mountedEditor]),
+          );
+      })
+      .catch(() =>
+        setError(
+          "The shared editor could not load. Your notebook is retained; reload to reconnect.",
+        ),
+      );
+    return () => {
+      cancelled = true;
+      binding?.destroy();
+    };
+  }, [notebook.client, mountedEditor, notebook.state.role]);
+
+  const updateNotebookSetting = (key: string, value: string) => {
+    if (notebook.client && notebook.state.role === "edit")
+      notebookTypes(notebook.client.doc).settings.set(key, value);
+  };
 
   const activeFrame = useMemo(
     () => materializeDebuggerStep(trace, frameIndex),
@@ -220,8 +302,10 @@ export default function App() {
     setRunning(true);
     setPlaying(false);
     setError(undefined);
+    const version = executionVersion.current;
     try {
       const nextTrace = await adapter.execute({ source: code, runSpec });
+      if (version !== executionVersion.current) return;
       setTrace(nextTrace);
       setAttentionSessionId((current) => current + 1);
       const firstModuleState = nextTrace.frames.findIndex(
@@ -241,7 +325,11 @@ export default function App() {
         setError(nextTrace.error);
       }
     } catch (executionError) {
-      setError(executionError instanceof Error ? executionError.message : String(executionError));
+      setError(
+        executionError instanceof Error
+          ? executionError.message
+          : String(executionError),
+      );
     } finally {
       setRunning(false);
     }
@@ -251,7 +339,8 @@ export default function App() {
     const adapter = new PyodideDebuggerAdapter();
     const unsubscribe = adapter.subscribe(setRuntimeStatus);
     debuggerRef.current = adapter;
-    void execute(initialExample.source, initialExample.runSpec);
+    if (!notebook.joinedInitially)
+      void execute(initialExample.source, initialExample.runSpec);
     return () => {
       unsubscribe();
       adapter.dispose();
@@ -268,14 +357,19 @@ export default function App() {
     positionExecutionHighlight(activeFrame.source.line, true, true);
   }, [activeFrame, positionExecutionHighlight]);
 
-  useEffect(() => () => {
-    editorDisposablesRef.current.forEach((disposable) => disposable.dispose());
-    highlightAnimationRef.current?.cancel();
-    if (highlightFrameRef.current !== null) {
-      cancelAnimationFrame(highlightFrameRef.current);
-    }
-    executionHighlightRef.current?.remove();
-  }, []);
+  useEffect(
+    () => () => {
+      editorDisposablesRef.current.forEach((disposable) =>
+        disposable.dispose(),
+      );
+      highlightAnimationRef.current?.cancel();
+      if (highlightFrameRef.current !== null) {
+        cancelAnimationFrame(highlightFrameRef.current);
+      }
+      executionHighlightRef.current?.remove();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!playing || !trace) {
@@ -286,16 +380,26 @@ export default function App() {
       return;
     }
     const timeout = window.setTimeout(
-      () => setFrameIndex((current) => Math.min(playbackLength - 1, current + 1)),
+      () =>
+        setFrameIndex((current) => Math.min(playbackLength - 1, current + 1)),
       scene?.operationMotion
-        ? defaultTraceframeRendererConfig.operationMotionDurationMs * 1.85 / speed
+        ? (defaultTraceframeRendererConfig.operationMotionDurationMs * 1.85) /
+            speed
         : 650 / speed,
     );
     return () => window.clearTimeout(timeout);
-  }, [frameIndex, playbackLength, playing, scene?.operationMotion, speed, trace]);
+  }, [
+    frameIndex,
+    playbackLength,
+    playing,
+    scene?.operationMotion,
+    speed,
+    trace,
+  ]);
 
   const handleEditorMount: OnMount = (editor, editorApi) => {
     editorRef.current = editor;
+    setMountedEditor(editor);
     const editorNode = editor.getDomNode();
     if (!editorNode) {
       return;
@@ -368,44 +472,48 @@ export default function App() {
     }
   };
 
-  const handleProjectionViewChange = useCallback((
-    variableName: string,
-    mode: "structural" | "graph",
-    directed = false,
-  ) => {
-    const declarations = (projectionContracts?.declarations ?? []).filter(
-      (declaration) => declaration.target.root.name !== variableName,
-    );
-    if (mode === "graph") {
-      declarations.push({
-        id: `interactive-view:${variableName}`,
-        target: {
-          root: { kind: "binding", name: variableName },
-          segments: [],
-        },
-        configuration: {
-          kind: "graph",
-          representation: "adjacency-list",
-          directed,
-        },
-      });
-    }
-    const nextContracts: ProjectionContractsV1 | undefined =
-      declarations.length > 0
-        ? { version: 1, declarations }
-        : undefined;
-    setProjectionContracts(nextContracts);
-    setTrace((current) => current
-      ? {
-          ...current,
-          runSpec: {
-            ...current.runSpec,
-            projectionContracts: nextContracts,
+  const handleProjectionViewChange = useCallback(
+    (variableName: string, mode: "structural" | "graph", directed = false) => {
+      const declarations = (projectionContracts?.declarations ?? []).filter(
+        (declaration) => declaration.target.root.name !== variableName,
+      );
+      if (mode === "graph") {
+        declarations.push({
+          id: `interactive-view:${variableName}`,
+          target: {
+            root: { kind: "binding", name: variableName },
+            segments: [],
           },
-        }
-      : current
-    );
-  }, [projectionContracts]);
+          configuration: {
+            kind: "graph",
+            representation: "adjacency-list",
+            directed,
+          },
+        });
+      }
+      const nextContracts: ProjectionContractsV1 | undefined =
+        declarations.length > 0 ? { version: 1, declarations } : undefined;
+      setProjectionContracts(nextContracts);
+      if (notebook.client && notebook.state.role === "edit") {
+        notebookTypes(notebook.client.doc).settings.set(
+          "projectionContracts",
+          nextContracts ? JSON.stringify(nextContracts) : "",
+        );
+      }
+      setTrace((current) =>
+        current
+          ? {
+              ...current,
+              runSpec: {
+                ...current.runSpec,
+                projectionContracts: nextContracts,
+              },
+            }
+          : current,
+      );
+    },
+    [projectionContracts, notebook.client, notebook.state.role],
+  );
 
   const handleRun = () => {
     try {
@@ -492,11 +600,14 @@ export default function App() {
         <div className="example-select-wrap">
           <Code2 size={14} aria-hidden="true" />
           <select
+            disabled={Boolean(notebook.client)}
             onChange={(event) => handleExampleChange(event.target.value)}
             value={selectedExample}
             aria-label="Example program"
           >
-            {selectedExample === "custom" && <option value="custom">Custom program</option>}
+            {selectedExample === "custom" && (
+              <option value="custom">Custom program</option>
+            )}
             {examples.map((example) => (
               <option key={example.id} value={example.id}>
                 {example.name}
@@ -524,6 +635,7 @@ export default function App() {
             </button>
             <button
               className="header-icon-button"
+              disabled={Boolean(notebook.client)}
               onClick={() => replayInputRef.current?.click()}
               title="Open replay"
               aria-label="Open replay"
@@ -544,15 +656,43 @@ export default function App() {
           </div>
           <button
             className="run-button"
-            disabled={running}
+            disabled={
+              running || Boolean(notebook.client && !notebook.state.role)
+            }
             onClick={handleRun}
             type="button"
           >
-            {running ? <Activity size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
+            {running ? (
+              <Activity size={15} aria-hidden="true" />
+            ) : (
+              <Play size={15} aria-hidden="true" />
+            )}
             {running ? "Running" : "Run code"}
           </button>
         </div>
       </header>
+
+      <NotebookPanel
+        client={notebook.client}
+        state={notebook.state}
+        change={notebook.change}
+        error={notebook.error}
+        viewToken={notebook.viewToken}
+        editor={mountedEditor}
+        onCreate={(title) =>
+          void notebook.create(source, {
+            title,
+            mode: runMode,
+            entrypoint,
+            argumentsText,
+            projectionContracts: projectionContracts
+              ? JSON.stringify(projectionContracts)
+              : "",
+          })
+        }
+        onJoin={notebook.join}
+        onLeave={notebook.leave}
+      />
 
       <main className="workspace">
         <section className="editor-pane" aria-label="Python editor">
@@ -588,7 +728,9 @@ export default function App() {
               onChange={(value) => handleSourceChange(value ?? "")}
               onMount={handleEditorMount}
               options={{
-                fontFamily: "JetBrains Mono, Cascadia Code, Consolas, monospace",
+                readOnly: notebookReadOnly,
+                fontFamily:
+                  "JetBrains Mono, Cascadia Code, Consolas, monospace",
                 fontSize: 13,
                 glyphMargin: true,
                 lineHeight: 21,
@@ -601,17 +743,23 @@ export default function App() {
                 wordWrap: "off",
               }}
               theme="traceframe-dark"
-              value={source}
+              value={notebook.client ? undefined : source}
             />
           </div>
           <div className="run-config">
             <div className="run-config-heading">
               <span className="panel-kicker">RUN</span>
-              <div className="mode-control" role="group" aria-label="Execution mode">
+              <div
+                className="mode-control"
+                role="group"
+                aria-label="Execution mode"
+              >
                 <button
+                  disabled={notebookReadOnly}
                   className={runMode === "function" ? "active" : ""}
                   onClick={() => {
                     setRunMode("function");
+                    updateNotebookSetting("mode", "function");
                     markRunConfigurationCustom();
                   }}
                   type="button"
@@ -619,9 +767,11 @@ export default function App() {
                   Function
                 </button>
                 <button
+                  disabled={notebookReadOnly}
                   className={runMode === "script" ? "active" : ""}
                   onClick={() => {
                     setRunMode("script");
+                    updateNotebookSetting("mode", "script");
                     markRunConfigurationCustom();
                   }}
                   type="button"
@@ -635,9 +785,11 @@ export default function App() {
                 <label>
                   <span>ENTRY POINT</span>
                   <input
+                    disabled={notebookReadOnly}
                     aria-label="Function entry point"
                     onChange={(event) => {
                       setEntrypoint(event.target.value);
+                      updateNotebookSetting("entrypoint", event.target.value);
                       markRunConfigurationCustom();
                     }}
                     spellCheck={false}
@@ -647,9 +799,14 @@ export default function App() {
                 <label className="arguments-field">
                   <span>ARGUMENTS JSON</span>
                   <textarea
+                    disabled={notebookReadOnly}
                     aria-label="Function arguments JSON"
                     onChange={(event) => {
                       setArgumentsText(event.target.value);
+                      updateNotebookSetting(
+                        "argumentsText",
+                        event.target.value,
+                      );
                       markRunConfigurationCustom();
                     }}
                     spellCheck={false}
@@ -674,7 +831,9 @@ export default function App() {
           <div className="pane-heading visual-heading">
             <div>
               <span className="panel-kicker">EXECUTION</span>
-              <strong>{activeFrame ? activeFrame.functionName : "Waiting for trace"}</strong>
+              <strong>
+                {activeFrame ? activeFrame.functionName : "Waiting for trace"}
+              </strong>
             </div>
           </div>
 

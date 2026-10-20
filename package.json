@@ -8,16 +8,18 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run build:packages && npm run dev -w @traceframe/playground",
+    "dev": "npm run build:packages && node tools/dev.mjs",
     "build:packages": "npm run build -w @traceframe/core && npm run build -w @traceframe/react && npm run build -w @traceframe/python",
     "build": "npm run build:packages && npm run build -w @traceframe/playground",
     "preview": "npm run preview -w @traceframe/playground",
-    "test": "vitest run",
+    "test": "vitest run && npm run test -w @traceframe/notebook-server",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:update": "playwright test --update-snapshots",
     "check": "npm run check -w @traceframe/core && npm run check -w @traceframe/react && npm run check -w @traceframe/python && npm run check -w @traceframe/playground",
-    "pack:check": "npm run build:packages && npm pack --dry-run -w @traceframe/core && npm pack --dry-run -w @traceframe/react && npm pack --dry-run -w @traceframe/python"
+    "pack:check": "npm run build:packages && npm pack --dry-run -w @traceframe/core && npm pack --dry-run -w @traceframe/react && npm pack --dry-run -w @traceframe/python",
+    "pretest": "npm run build:packages",
+    "experiment:annotations": "node tools/annotation-experiment.mjs .audit/annotation-experiment"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
@@ -27,13 +29,20 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.5",
+    "fake-indexeddb": "6.2.6",
     "jsdom": "30.0.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "tsup": "8.5.1",
     "typescript": "7.0.2",
     "vite": "8.2.0",
-    "vitest": "4.1.10"
+    "vitest": "4.1.12"
   },
   "overrides": {
-    "dompurify": "3.4.12"
+    "dompurify": "3.4.17",
+    "esbuild": "0.28.2",
+    "monaco-editor": "0.52.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   }
 }

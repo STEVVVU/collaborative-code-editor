@@ -15,7 +15,11 @@
     "@traceframe/python": "0.1.0",
     "@traceframe/react": "0.1.0",
     "lucide-react": "1.28.0",
+    "monaco-editor": "0.52.2",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "y-monaco": "0.1.6",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.33"
   }
 }
