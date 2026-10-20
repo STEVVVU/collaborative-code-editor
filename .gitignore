@@ -1,6 +1,7 @@
 node_modules/
 dist/
-.agents/
+.audit/
+.traceframe/
 .vite.*.log
 playwright-report/
 test-results/
