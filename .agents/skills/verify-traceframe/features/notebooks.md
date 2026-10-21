@@ -1,5 +1,13 @@
 # Shared notebooks
 
+## Presence
+
+Open the same editor link in two real browser tabs and confirm both notebook status rows list two
+online sessions. Open the viewer link in a third tab and confirm the list adds a viewer session while
+its editing controls remain disabled. Close one tab; the remaining tabs must remove that session.
+Reload a tab to verify the session is replaced, and confirm its document revision does not change.
+Presence identifies only active connections and is not persisted.
+
 Launch the owned verifier and open three fresh CUA tabs on its base URL. Wait for the standalone Python examples to complete. First run `driveExecutionBaseline(owner, evidence)` from the execution module.
 
 Import `tools/verify-notebook-browser.mjs` in CUA. Run:

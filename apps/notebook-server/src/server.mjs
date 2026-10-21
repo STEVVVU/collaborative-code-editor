@@ -165,6 +165,11 @@ export async function createNotebookServer({
     "UPDATE notebooks SET state = ?, revision = ? WHERE id = ?",
   );
   const peers = new Map();
+  const publishPresence = (id) => {
+    const sessions = [...(peers.get(id)?.values() ?? [])].map(({ sessionId, role }) => ({ sessionId, role }));
+    for (const socket of peers.get(id)?.keys() ?? [])
+      send(socket, { type: "presence", sessions });
+  };
   const originAllowed = (request) =>
     request.headers.origin === undefined || origins.has(request.headers.origin);
   const respond = (response, status, value) => {
@@ -300,6 +305,7 @@ export async function createNotebookServer({
   });
   websocket.on("connection", (socket, id) => {
     let role = null;
+    let sessionId;
     const timeout = setTimeout(() => {
       send(socket, { type: "error", message: "Authentication required" });
       socket.close(1008, "Authentication required");
@@ -308,8 +314,10 @@ export async function createNotebookServer({
     socket.on("close", () => {
       clearTimeout(timeout);
       const room = peers.get(id);
-      room?.delete(socket);
-      if (room?.size === 0) peers.delete(id);
+      if (room?.delete(socket)) {
+        if (room.size === 0) peers.delete(id);
+        else publishPresence(id);
+      }
     });
     socket.on("message", (data, binary) => {
       try {
@@ -327,13 +335,15 @@ export async function createNotebookServer({
           }
           clearTimeout(timeout);
           if (!peers.has(id)) peers.set(id, new Map());
-          peers.get(id).set(socket, role);
+          sessionId = randomUUID();
+          peers.get(id).set(socket, { sessionId, role });
           send(socket, {
             type: "state",
             state: Buffer.from(row.state).toString("base64"),
             revision: row.revision,
             role,
           });
+          publishPresence(id);
           return;
         }
         requireValid(role === "edit");
@@ -365,8 +375,8 @@ export async function createNotebookServer({
         };
         send(socket, { ...committed, role, ack: message.updateId });
         if (changed)
-          for (const [peer, peerRole] of peers.get(id) ?? [])
-            if (peer !== socket) send(peer, { ...committed, role: peerRole });
+          for (const [peer, peerInfo] of peers.get(id) ?? [])
+            if (peer !== socket) send(peer, { ...committed, role: peerInfo.role });
       } catch {
         send(socket, { type: "error", message: "Notebook update rejected" });
       }

@@ -88,6 +88,39 @@ it("authenticates in a message and only the latest acknowledgement marks edits s
   expect(notebookTypes(client.doc).source.toString()).toContain("local");
 });
 
+it("keeps online sessions separate from document revisions and ignores stale socket presence", () => {
+  state("edit");
+  const revision = client.state.revision;
+  socket.receive({
+    type: "presence",
+    sessions: [
+      { sessionId: "session-a", role: "edit" },
+      { sessionId: "session-b", role: "view" },
+    ],
+  });
+  expect(client.state.presence).toEqual([
+    { sessionId: "session-a", role: "edit" },
+    { sessionId: "session-b", role: "view" },
+  ]);
+  expect(client.state.revision).toBe(revision);
+  const stale = socket;
+  client.reconnect();
+  const current = Socket.instances.at(-1)!;
+  current.onopen?.();
+  stale.receive({ type: "presence", sessions: [] });
+  expect(client.state.presence).toEqual([]);
+  current.receive({
+    type: "presence",
+    sessions: [{ sessionId: "session-c", role: "edit" }],
+  });
+  expect(client.state.presence).toEqual([
+    { sessionId: "session-c", role: "edit" },
+  ]);
+  current.receive({ type: "presence", sessions: [] });
+  expect(client.state.presence).toEqual([]);
+  expect(client.state.revision).toBe(revision);
+});
+
 it("does not send viewer document changes", () => {
   state("view");
   notebookTypes(client.doc).source.insert(0, "attempted ");

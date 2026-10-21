@@ -109,6 +109,13 @@ export function NotebookPanel({
                   : "Authenticating"}{" "}
               · r{state.revision}
             </span>
+            <span className="notebook-presence" aria-label="Online sessions">
+              Online: {state.presence.length
+                ? state.presence
+                    .map(({ role }) => (role === "edit" ? "Editor" : "Viewer"))
+                    .join(", ")
+                : "none"}
+            </span>
             {canEdit && (
               <button
                 type="button"

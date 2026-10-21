@@ -12,12 +12,13 @@ export interface ConnectionState {
   status: "connecting" | "saved" | "pending" | "offline" | "error";
   role?: NotebookRole;
   revision: number;
+  presence: { sessionId: string; role: NotebookRole }[];
   message?: string;
 }
 
 export class NotebookClient {
   readonly doc = new Y.Doc();
-  state: ConnectionState = { status: "connecting", revision: 0 };
+  state: ConnectionState = { status: "connecting", revision: 0, presence: [] };
   private storage?: NotebookPersistence;
   private socket?: WebSocket;
   private retry?: ReturnType<typeof setTimeout>;
@@ -72,6 +73,7 @@ export class NotebookClient {
         this.publish({
           status: "offline",
           role: cachedRole,
+          presence: [],
           revision:
             typeof cachedRevision === "number" &&
             Number.isSafeInteger(cachedRevision)
@@ -87,6 +89,7 @@ export class NotebookClient {
       this.publish({
         status: "error",
         revision: 0,
+        presence: [],
         message:
           "Local notebook storage is unavailable. Allow site storage and reopen this notebook.",
       });
@@ -170,6 +173,26 @@ export class NotebookClient {
           });
           return;
         }
+        if (message.type === "presence") {
+          if (
+            !Array.isArray(message.sessions) ||
+            !message.sessions.every(
+              (session: unknown) =>
+                session !== null &&
+                typeof session === "object" &&
+                typeof (session as Record<string, unknown>).sessionId ===
+                  "string" &&
+                ((session as Record<string, unknown>).role === "edit" ||
+                  (session as Record<string, unknown>).role === "view"),
+            )
+          )
+            throw new Error("Invalid notebook presence");
+          this.publish({
+            ...this.state,
+            presence: message.sessions as ConnectionState["presence"],
+          });
+          return;
+        }
         if (
           message.type !== "state" ||
           !["edit", "view"].includes(message.role) ||
@@ -197,6 +220,7 @@ export class NotebookClient {
                 : "pending",
           role: message.role,
           revision: message.revision,
+          presence: this.state.presence,
           message: this.storageError ?? this.syncError,
         });
         if (first && message.role === "edit") {
@@ -217,8 +241,16 @@ export class NotebookClient {
     socket.onclose = () => {
       if (this.disposed || this.socket !== socket) return;
       this.authenticated = false;
-      if (this.state.status === "error") return;
-      this.publish({ ...this.state, status: "offline", message: undefined });
+      if (this.state.status === "error") {
+        this.publish({ ...this.state, presence: [] });
+        return;
+      }
+      this.publish({
+        ...this.state,
+        status: "offline",
+        presence: [],
+        message: undefined,
+      });
       this.retry = setTimeout(this.connect, 2000);
     };
     socket.onerror = () => {
@@ -233,7 +265,12 @@ export class NotebookClient {
     this.socket = undefined;
     previous?.close();
     this.syncError = undefined;
-    this.publish({ ...this.state, status: "connecting", message: undefined });
+    this.publish({
+      ...this.state,
+      status: "connecting",
+      presence: [],
+      message: undefined,
+    });
     if (!this.initialized || this.storageError) {
       this.storage?.destroy();
       this.storageError = undefined;

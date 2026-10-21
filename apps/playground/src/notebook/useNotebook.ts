@@ -36,6 +36,7 @@ export function useNotebook(
   const [state, setState] = useState<ConnectionState>({
     status: "connecting",
     revision: 0,
+    presence: [],
   });
   const [change, setChange] = useState(0);
   const [error, setError] = useState<string>();

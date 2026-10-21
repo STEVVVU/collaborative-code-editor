@@ -68,34 +68,41 @@ async function fixture(t) {
     const pending = [];
     socket.on("message", (data) => {
       const value = JSON.parse(data.toString());
-      const waiter = pending.shift();
+      const index = pending.findIndex(({ accepts }) => accepts(value));
+      const waiter = index < 0 ? undefined : pending.splice(index, 1)[0];
       if (waiter) waiter.resolve(value);
       else queue.push(value);
     });
     socket.on("error", () => {});
     t.after(() => socket.terminate());
     await once(socket, "open");
-    const next = () =>
-      queue.length
-        ? Promise.resolve(queue.shift())
+    const nextMatching = (accepts) => {
+      const index = queue.findIndex(accepts);
+      return index >= 0
+        ? Promise.resolve(queue.splice(index, 1)[0])
         : new Promise((resolve, reject) => {
             const timer = setTimeout(
               () => reject(new Error("No server response")),
               3000,
             );
             pending.push({
+              accepts,
               resolve: (value) => {
                 clearTimeout(timer);
                 resolve(value);
               },
             });
           });
+    };
+    const next = () => nextMatching((message) => message.type !== "presence");
+    const nextPresence = () => nextMatching((message) => message.type === "presence");
     socket.send(JSON.stringify({ type: "auth", token }));
     const initial = await next();
     return {
       socket,
       initial,
       next,
+      nextPresence,
       send: (value) => socket.send(JSON.stringify(value)),
     };
   };
@@ -141,6 +148,38 @@ test("creation, capability authentication, SQLite hashes, and restart preserve a
     state: room.state,
     revision: room.revision,
   });
+});
+
+test("authenticated presence is room-scoped, role-only, ephemeral, and removed on disconnect", async (t) => {
+  const f = await fixture(t);
+  const room = await f.create();
+  const otherRoom = await f.create();
+  const editor = await f.connect(room);
+  const editorPresence = await editor.nextPresence();
+  assert.equal(editorPresence.type, "presence");
+  assert.deepEqual(editorPresence.sessions.map(({ role }) => role), ["edit"]);
+
+  const viewer = await f.connect(room, room.viewToken);
+  const viewerPresence = await viewer.nextPresence();
+  assert.equal(viewerPresence.type, "presence");
+  assert.deepEqual(viewerPresence.sessions.map(({ role }) => role), ["edit", "view"]);
+  assert.deepEqual((await editor.nextPresence()).sessions.map(({ role }) => role), ["edit", "view"]);
+  assert.equal(new Set(viewerPresence.sessions.map(({ sessionId }) => sessionId)).size, 2);
+  assert.equal(JSON.stringify(viewerPresence).includes(room.editToken), false);
+  assert.equal(JSON.stringify(viewerPresence).includes(room.viewToken), false);
+
+  const isolated = await f.connect(otherRoom);
+  const isolatedPresence = await isolated.nextPresence();
+  assert.deepEqual(isolatedPresence.sessions.map(({ role }) => role), ["edit"]);
+  const closed = once(viewer.socket, "close");
+  viewer.socket.close();
+  await closed;
+  const afterDisconnect = await editor.nextPresence();
+  assert.deepEqual(afterDisconnect.sessions.map(({ role }) => role), ["edit"]);
+  assert.equal(afterDisconnect.sessions[0].sessionId, editorPresence.sessions[0].sessionId);
+  const persisted = await f.open(room);
+  assert.equal(persisted.data.revision, room.revision);
+  assert.equal(persisted.data.state, room.state);
 });
 
 test("two editors merge concurrent full states, acknowledge retries, and persist the merged revision", async (t) => {

@@ -1,11 +1,13 @@
-# Traceframe
+# Collaborative code editor (Traceframe)
 
 Traceframe is an interactive execution visualizer. It runs Python in a browser worker, records
 versioned runtime state, compiles that state through generic projection rules, and synchronizes
 the result with editable source code, structured inputs, and timeline controls.
 
-Shared debugging notebooks add code co-editing over WebSockets, offline drafts in IndexedDB,
-SQLite persistence, separate editor/viewer links, and comments anchored to character identities.
+Shared debugging notebooks add code co-editing over WebSockets, server-authenticated online editor/viewer
+presence, offline drafts in IndexedDB, SQLite persistence, separate editor/viewer links, and comments
+anchored to character identities. Presence lists connected sessions and roles; it does not identify people
+and is never written to the document or persistent storage.
 Python execution remains local and explicit; receiving shared code never starts a run.
 
 ![Shared notebook with an anchored code comment and a completed local Python trace](docs/images/shared-notebook.png)
@@ -37,6 +39,11 @@ Editor/viewer capabilities are consumed from link fragments and kept in per-tab 
 The service stores capability hashes. This is a local capability-based application without accounts
 or individual link revocation. Run only code you trust: a browser worker is not a network or resource
 security boundary. See [the protocol and limits](docs/notebook-protocol.md) before hosting elsewhere.
+
+The local notebook reuses Traceframe's Yjs browser document and synchronizes source, settings, and comments.
+It does not implement the Stanford project's Automerge-based Sublime Text directory synchronization or
+filesystem build/grader workflow. See the [original project paper](https://www.scs.stanford.edu/24sp-cs244b/projects/Local-based_collaborative_text_editor_using_CRDT.pdf)
+for that distinct system.
 
 The annotation experiment is inspired by [Peritext](https://www.inkandswitch.com/peritext/).
 It implements a bounded character-relative comment span policy on Yjs, rather than the full
