@@ -107,7 +107,7 @@ it("keeps online sessions separate from document revisions and ignores stale soc
   client.reconnect();
   const current = Socket.instances.at(-1)!;
   current.onopen?.();
-  stale.receive({ type: "presence", sessions: [] });
+  stale.receive({ type: "presence", sessions: [{ sessionId: "stale-session", role: "view" }] });
   expect(client.state.presence).toEqual([]);
   current.receive({
     type: "presence",

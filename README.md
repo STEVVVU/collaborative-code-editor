@@ -1,4 +1,4 @@
-# Collaborative code editor (Traceframe)
+# Collaborative code editor
 
 Traceframe is an interactive execution visualizer. It runs Python in a browser worker, records
 versioned runtime state, compiles that state through generic projection rules, and synchronizes

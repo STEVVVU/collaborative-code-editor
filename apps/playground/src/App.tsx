@@ -593,7 +593,7 @@ export default function App() {
           <span className="brand-mark">
             <Braces size={17} strokeWidth={2.2} aria-hidden="true" />
           </span>
-          <strong>Traceframe</strong>
+          <strong>Collaborative code editor</strong>
           <span className="build-tag">alpha</span>
         </div>
 
