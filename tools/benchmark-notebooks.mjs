@@ -99,7 +99,7 @@ if (process.argv[2] === '--serve') {
       let reconnect;
       for (let i = 0; i < count; i++) {
         const scheduled = base + i * 1000 / config.rate;
-        await delay(Math.max(0, scheduled - performance.now()));
+        while (performance.now() < scheduled) await delay(Math.ceil(scheduled - performance.now()));
         if (config.reconnect && i === Math.floor(count / 3)) {offline.offline = true; offline.socket.terminate();}
         if (config.reconnect && i === Math.floor(2 * count / 3)) {
           const at = performance.now(); await connect(offline); offline.offline = false;
@@ -108,6 +108,7 @@ if (process.argv[2] === '--serve') {
         const peer = peers[i % (config.reconnect ? config.clients - 1 : config.clients)];
         const marker = `#${i.toString(16).padStart(7, '0')}\n`;
         const update = {id: String(i), marker, scheduled, lateness: performance.now() - scheduled, seen: [], observed: []};
+        assert(update.lateness >= 0, 'offer predates its scheduled deadline');
         updates.push(update);
         peer.doc.getText('source').insert(peer.doc.getText('source').length, marker);
         peer.socket.send(JSON.stringify({type: 'update', updateId: update.id, state: Buffer.from(Y.encodeStateAsUpdate(peer.doc)).toString('base64')}));
@@ -116,6 +117,7 @@ if (process.argv[2] === '--serve') {
       }
       const drain = performance.now() + 30_000;
       while (updates.some(u => u.ack === undefined || u.seen.length !== config.clients) && performance.now() < drain) await delay(10);
+      assert(updates.every(u => (u.ack === undefined || u.ack >= 0) && u.observed.every(o => o.ms >= 0)), 'acknowledgment or convergence predates the offer deadline');
       const persisted = await fetch(`${url}/api/notebooks/${room.id}/open`, {method: 'POST', headers: {authorization: `Bearer ${room.editToken}`}, signal: AbortSignal.timeout(5000)});
       assert.equal(persisted.status, 200);
       const saved = new Y.Doc(); saved.getText('source'); saved.getMap('settings'); saved.getArray('annotations');
