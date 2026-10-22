@@ -1,0 +1,27 @@
+name: Notebook protocol benchmark
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build:packages
+      - run: node tools/benchmark-notebooks.mjs --smoke
+      - run: node tools/benchmark-notebooks.mjs
+      - run: node --cpu-prof --cpu-prof-dir=.audit/benchmarks tools/benchmark-notebooks.mjs --profile
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notebook-benchmark-${{ github.sha }}
+          path: .audit/benchmarks/
+          include-hidden-files: true
+          retention-days: 14

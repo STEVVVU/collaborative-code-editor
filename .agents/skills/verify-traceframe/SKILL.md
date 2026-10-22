@@ -40,6 +40,10 @@ The directory retains `launch.json`, `server.log`, browser action/result files, 
 
 Send Ctrl+C to the owned launch terminal. The helper stops its captured children and records `cleanup: true` after checking that both listeners are unavailable. Confirm the process/session finished, then inspect `server-result.json`. Close the temporary verification tabs unless they are requested deliverables. Verify that screenshots and action/result files still exist after cleanup.
 
+## Protocol load benchmark
+
+The maintained `tools/benchmark-notebooks.mjs` drives real disk-backed service processes through authenticated HTTP/WebSocket and Yjs clients. Run `--smoke` first, then follow [the frozen plan](../../../../docs/benchmark-plan.md) for measured campaigns and separate profiling. The manual `benchmark.yml` workflow runs on an isolated hosted runner and retains raw evidence after task-owned cleanup. This is protocol convergence evidence; browser paint still requires CUA.
+
 ## Helpers
 
 `tools/verify-traceframe-server.mjs` handles Launch, Doctor, and Cleanup. `tools/verify-traceframe-browser.mjs` and `tools/verify-notebook-browser.mjs` handle browser Drive and Evidence. Run `npm run check`, `npm test`, `npm run build`, `npm run experiment:annotations`, and `npm audit` separately. A mapped journey without a completed drive remains unverified.

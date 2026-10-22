@@ -1,5 +1,9 @@
 # Shared notebooks
 
+## Load and reconnect benchmark
+
+`node tools/benchmark-notebooks.mjs --smoke` exercises Launch, readiness, concurrent edits, peer disconnect/rejoin, exact persisted convergence, evidence and owned Cleanup. The frozen full matrix in `docs/benchmark-plan.md` adds rate/client/source sweeps, repeated samples, resource telemetry and stability. Inspect each `sample.json` and campaign `evidence.json`; failed or generator-limited cells cannot support a capacity claim.
+
 ## Presence
 
 Open the same editor link in two real browser tabs and confirm both notebook status rows list two
