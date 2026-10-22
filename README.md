@@ -1,5 +1,7 @@
 # Collaborative code editor
 
+[Measured notebook protocol results](docs/benchmark-results.md): 141 hosted cells delivered all 29,150 offered edits with zero failures/timeouts. At 32 clients, 48 KiB and 50 aggregate edits/s, scheduled edit-to-all-peer convergence p50 was 8.72 ms (five-repeat range 7.01–9.68) and empirical p99 was 15.52 ms (11.13–17.15). The report includes lower-rate outliers, reconnect/stability, CPU/memory, raw evidence hashes and the reproducible command. These measurements cover the disk-backed Yjs protocol; browser paint and maximum capacity remain unmeasured.
+
 Traceframe is an interactive execution visualizer. It runs Python in a browser worker, records
 versioned runtime state, compiles that state through generic projection rules, and synchronizes
 the result with editable source code, structured inputs, and timeline controls.
