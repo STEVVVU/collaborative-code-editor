@@ -2,6 +2,7 @@
 
 ## Guide
 
+- [Implementation techniques](#implementation-techniques)
 - [Architecture and execution guide](#architecture-and-execution-guide)
 - [Run locally](#run-locally)
 - [Review code together](#review-code-together)
@@ -253,5 +254,343 @@ A Yjs document is a mergeable shared data structure for notebook source, setting
 <details><summary>What is a capability link?</summary>
 
 A capability link grants its role to whoever possesses it. The service stores hashes; there are no individual accounts or per-link revocation.
+
+</details>
+
+## Implementation techniques
+
+This section covers the active execution, projection and notebook paths listed in the architecture table. Design rationales are inferred from current code.
+
+| Active subsystem | Technique cards | Source files |
+|---|---|---|
+| Trace normalization and replay | [Frame coalescing](#technique-frame-coalescing), [Execution timeline materialization](#technique-execution-timeline-materialization), [Versioned replay validation and upgrade](#technique-versioned-replay-validation-and-upgrade) | `packages/core/src/diff.ts`, `packages/core/src/executionModel.ts`, `packages/core/src/replay.ts`, `packages/core/src/traceUpgrade.ts` |
+| Python observation and worker execution | [AST instrumentation](#technique-ast-instrumentation), [Stable runtime identity](#technique-stable-runtime-identity), [Isolated worker execution and cancellation](#technique-isolated-worker-execution-and-cancellation), [Execution resource bounds](#technique-execution-resource-bounds) | `packages/python/src/python.worker.ts`, `packages/python/src/pyodideDebuggerAdapter.ts`, `packages/python/src/workerProtocol.ts` |
+| Structural projection and scene compilation | [Contracted structural projection](#technique-contracted-structural-projection), [Identity-derived relation graphs](#technique-identity-derived-relation-graphs) | `packages/core/src/scene.ts` |
+| Graph layout and identity motion | [Topology-aware layout](#technique-topology-aware-layout), [Identity-based motion planning](#technique-identity-based-motion-planning), [Collision-aware topology transitions](#technique-collision-aware-topology-transitions) | `packages/core/src/topologyLayout.ts`, `packages/core/src/topologyMotion.ts`, `packages/core/src/motion.ts`, `packages/react/src/SceneMotionController.ts` |
+| Attention workspace | [Derived attention timeline](#technique-derived-attention-timeline), [Semantic levels of detail](#technique-semantic-level-of-detail) | `packages/core/src/attention.ts`, `packages/react/src/AttentionWorkspace.tsx` |
+| Notebook document and comments | [Yjs CRDT merge with relative comment anchors](#technique-yjs-crdt-merge-with-relative-comment-anchors) | `apps/playground/src/notebook/client.ts`, `apps/playground/src/notebook/document.ts` |
+| Notebook authorization and server persistence | [Capability hashing and role authorization](#technique-capability-hashing-and-role-authorization), [Validate candidates before transaction and broadcast](#technique-validate-candidates-before-transaction-and-broadcast) | `apps/notebook-server/src/server.mjs` |
+| Notebook offline/reconnect lifecycle | [IndexedDB append journal](#technique-indexeddb-append-journal), [Acknowledgement tracking and stale-response fencing](#technique-acknowledgement-tracking-and-stale-response-fencing) | `apps/playground/src/notebook/persistence.ts`, `apps/playground/src/notebook/client.ts`, `apps/playground/src/notebook/useNotebook.ts` |
+
+<a id="technique-frame-coalescing"></a>
+
+<details>
+<summary>Frame coalescing</summary>
+
+**Mechanism.** `coalesceFrames` combines raw debugger events into semantic frames, preserving meaningful transitions while collapsing low-level event noise.
+
+**Example.** Several callbacks around one assignment can become one frame with before and after bindings.
+
+**Why here.** The renderer consumes understandable execution steps instead of every interpreter callback.
+
+**Tradeoffs.** Intermediate events are hidden, so semantic playback gives up raw event granularity.
+
+**Code and ownership.** [`coalesceFrames`](packages/core/src/diff.ts#L139), extension.
+
+</details>
+
+<a id="technique-execution-timeline-materialization"></a>
+
+<details>
+<summary>Execution timeline materialization</summary>
+
+**Mechanism.** `materializeExecutionTimeline` walks normalized frames and reconstructs each frame's active stack, bindings, returns and mutations from recorded facts.
+
+**Example.** A return fact closes an activation and supplies its returned value to the reconstructed state.
+
+**Why here.** Views query one shared state per position instead of interpreting debugger facts independently.
+
+**Tradeoffs.** Reconstruction is limited by missing or incorrectly ordered observations.
+
+**Code and ownership.** [`materializeExecutionTimeline`](packages/core/src/executionModel.ts#L416), extension.
+
+</details>
+
+<a id="technique-versioned-replay-validation-and-upgrade"></a>
+
+<details>
+<summary>Versioned replay validation and upgrade</summary>
+
+**Mechanism.** Replay parsing validates untrusted JSON against bounded recursive value and trace schemas, then `upgradeExecutionTrace` fills fields introduced by newer trace versions before materialization.
+
+**Example.** A legacy frame without actor sequence gets a compatible default during upgrade.
+
+**Why here.** Saved traces remain portable inputs to the same projection pipeline.
+
+**Tradeoffs.** Schema evolution requires explicit upgrade rules; malformed or unsupported versions are rejected instead of guessed.
+
+**Code and ownership.** [`parseReplay`](packages/core/src/replay.ts#L626), [`upgradeExecutionTrace`](packages/core/src/traceUpgrade.ts#L184), extension.
+
+</details>
+
+<a id="technique-ast-instrumentation"></a>
+
+<details>
+<summary>AST instrumentation</summary>
+
+**Mechanism.** The worker parses Python source and transforms AST nodes to emit semantic events around execution, then runs the transformed program in Pyodide.
+
+**Example.** An assignment node is wrapped so its binding and value transition are recorded.
+
+**Why here.** AST events capture operations that line tracing alone cannot distinguish.
+
+**Tradeoffs.** Transformations must preserve Python semantics for each supported syntax form; execution stays local in the browser worker.
+
+**Code and ownership.** [`Instrumenter`](packages/python/src/python.worker.ts#L834), extension.
+
+</details>
+
+<a id="technique-stable-runtime-identity"></a>
+
+<details>
+<summary>Stable runtime identity tracking</summary>
+
+**Mechanism.** The worker assigns member IDs from owner identity, member value and role so repeated snapshots can refer to the same observed entity.
+
+**Example.** A mapping entry retains an ID as its value is observed in later frames.
+
+**Why here.** Projections need cross-frame identity to show movement and mutation.
+
+**Tradeoffs.** These are trace identities, not a guarantee of Python object identity after serialization or transformation.
+
+**Code and ownership.** [`stable_member_id`](packages/python/src/python.worker.ts#L114), extension.
+
+</details>
+
+<a id="technique-isolated-worker-execution-and-cancellation"></a>
+
+<details>
+<summary>Isolated worker execution and cancellation</summary>
+
+**Mechanism.** The adapter sends a typed request to a dedicated worker, correlates its response with a pending request, and terminates the worker when disposed or when an execution timeout expires.
+
+**Example.** On timeout the adapter rejects the run and terminates the worker rather than waiting on a blocked interpreter.
+
+**Why here.** User code does not occupy the UI thread, and worker termination is the cancellation boundary.
+
+**Tradeoffs.** Cancellation stops the worker process context; it is not cooperative task cancellation or a separate server process.
+
+**Code and ownership.** [`PyodideDebuggerAdapter.run`](packages/python/src/pyodideDebuggerAdapter.ts#L176), extension.
+
+</details>
+
+<a id="technique-execution-resource-bounds"></a>
+
+<details>
+<summary>Execution resource bounds</summary>
+
+**Mechanism.** Requests carry source, frame and memory limits; the worker checks traced memory while recording and the adapter enforces startup/runtime deadlines.
+
+**Example.** `enforce_memory_limit` compares current traced allocation with the run baseline and raises once the configured budget is exceeded.
+
+**Why here.** An interactive local runner needs visible failure paths for runaway or oversized programs.
+
+**Tradeoffs.** Traced Python allocations and deadlines do not bound every browser or WebAssembly resource precisely.
+
+**Code and ownership.** [`enforce_memory_limit`](packages/python/src/python.worker.ts#L1457), [`PyodideDebuggerAdapter.run`](packages/python/src/pyodideDebuggerAdapter.ts#L176), extension.
+
+</details>
+
+<a id="technique-contracted-structural-projection"></a>
+
+<details>
+<summary>Contracted structural projection</summary>
+
+**Mechanism.** The projection registry renders serialized values as structural sequences, grids, mappings and objects by default. A projection contract selects a target and declares graph semantics such as directedness and layout; runtime evidence can inform graph facets.
+
+**Example.** A nested list remains a sequence unless the selected contract identifies its adjacency interpretation.
+
+**Why here.** Structural data is unambiguous while graph meaning is supplied explicitly.
+
+**Tradeoffs.** Contracts need valid targets and can become stale as value shapes change; heuristic graph inference is intentionally constrained.
+
+**Code and ownership.** [`ProjectionRegistry.projectStructural`](packages/core/src/scene.ts#L747), [`compileScene`](packages/core/src/scene.ts#L2475), extension.
+
+</details>
+
+<a id="technique-identity-derived-relation-graphs"></a>
+
+<details>
+<summary>Identity-derived relation graphs</summary>
+
+**Mechanism.** `buildRelationGraph` traverses projected object, reference, sequence and mapping values, deduplicates entities by projection identity, then classifies connected structure as tree, cycle or network.
+
+**Example.** Two references to one object become edges to one entity rather than duplicate nodes.
+
+**Why here.** Linked structures can be shown from the observed object graph without changing source values.
+
+**Tradeoffs.** The relation view only includes reachable projected relationships; it does not infer arbitrary domain semantics.
+
+**Code and ownership.** [`buildRelationGraph`](packages/core/src/scene.ts#L2244), extension.
+
+</details>
+
+<a id="technique-topology-aware-layout"></a>
+
+<details>
+<summary>Topology-aware layout</summary>
+
+**Mechanism.** Layout dispatches by declared topology: breadth-first depth layers for trees, circular placement for networks/cycles, with dimensions expanded to fit node size and separation.
+
+**Example.** A rooted tree places reachable children in successive depth layers.
+
+**Why here.** Position communicates hierarchy or connectivity without a force-layout dependency.
+
+**Tradeoffs.** Circular network placement is deterministic but does not optimize crossings or encode edge weights.
+
+**Code and ownership.** [`layoutRelationGraph`](packages/core/src/topologyLayout.ts#L185), extension.
+
+</details>
+
+<a id="technique-identity-based-motion-planning"></a>
+
+<details>
+<summary>Identity-based motion planning</summary>
+
+**Mechanism.** Core derives motion from causal value links and semantic events. The React controller snapshots DOM geometry keyed by projection identity, then animates matching entities between recorded frames.
+
+**Example.** A value link can drive a token from its source projection path toward its new target path.
+
+**Why here.** Motion follows trace meaning and stable projection keys rather than DOM ordering.
+
+**Tradeoffs.** Motion depends on available source/target elements; layout or view changes can invalidate a geometric transition.
+
+**Code and ownership.** [`compileMotionPlan`](packages/core/src/motion.ts#L17), [`useSceneMotion`](packages/react/src/SceneMotionController.ts#L145), extension.
+
+</details>
+
+<a id="technique-collision-aware-topology-transitions"></a>
+
+<details>
+<summary>Collision-aware topology transitions</summary>
+
+**Mechanism.** `compileTopologyTransition` matches prior and next nodes by ID, derives origins for entering nodes from connected neighbors, and pushes crossing moving nodes apart before sampling interpolated poses.
+
+**Example.** A new child begins near its connected parent rather than at an arbitrary canvas corner.
+
+**Why here.** Graph changes retain spatial continuity while making entrances and exits visible.
+
+**Tradeoffs.** Pairwise adjustment is heuristic and cannot guarantee collision-free motion for every dense graph.
+
+**Code and ownership.** [`compileTopologyTransition`](packages/core/src/topologyMotion.ts#L145), extension.
+
+</details>
+
+<a id="technique-derived-attention-timeline"></a>
+
+<details>
+<summary>Derived attention timeline</summary>
+
+**Mechanism.** `compileAttentionTimeline` derives snapshots from the execution trace, and scene compilation indexes available variables and projections for resolving attention requests.
+
+**Example.** A requested variable path resolves to the projection and snapshot for its trace step.
+
+**Why here.** Attention reuses trace and scene data instead of maintaining another mutable execution model.
+
+**Tradeoffs.** A snapshot cannot highlight facts absent from captured events or projected state.
+
+**Code and ownership.** [`compileAttentionTimeline`](packages/core/src/attention.ts#L286), extension.
+
+</details>
+
+<a id="technique-yjs-crdt-merge-with-relative-comment-anchors"></a>
+
+<details>
+<summary>Yjs CRDT merge with relative comment anchors</summary>
+
+**Mechanism.** Notebook source and annotations live in a Yjs document; updates merge through Yjs state updates. Comment endpoints are encoded as relative positions in the shared text, then resolved against the current document after edits.
+
+**Example.** A comment attached to characters 7 through 12 follows those characters when earlier text is inserted.
+
+**Why here.** Concurrent edits merge and comments stay attached to text identity rather than fixed offsets.
+
+**Tradeoffs.** Deleted anchor content may no longer resolve; Yjs is the dependency-provided CRDT mechanism.
+
+**Code and ownership.** [`NotebookClient`](apps/playground/src/notebook/client.ts#L19), [`anchorAnnotation`](apps/playground/src/notebook/document.ts#L54), mixed.
+
+</details>
+
+<a id="technique-capability-hashing-and-role-authorization"></a>
+
+<details>
+<summary>Capability hashing and role authorization</summary>
+
+**Mechanism.** The browser holds an opaque editor or viewer token. The service hashes tokens with SHA-256 and compares the digest to the stored role hash to authorize a session; clear token material is not persisted as the database credential.
+
+**Example.** A presented token maps to the row's editor or viewer role only when its hash matches.
+
+**Why here.** Share links grant role-based access without an account service.
+
+**Tradeoffs.** Possession grants access; links lack per-person identity and individual revocation.
+
+**Code and ownership.** [`roleFor`](apps/notebook-server/src/server.mjs#L124), [`createNotebookServer`](apps/notebook-server/src/server.mjs#L147), extension.
+
+</details>
+
+<a id="technique-validate-candidates-before-transaction-and-broadcast"></a>
+
+<details>
+<summary>Validate candidates before transaction and broadcast</summary>
+
+**Mechanism.** For each incoming Yjs update, the service applies stored and incoming state to a candidate document, validates schema, size and annotation constraints, then persists the accepted state and revision before broadcasting it and acknowledging the sender.
+
+**Example.** Invalid settings or oversized state fails before a peer receives a committed update.
+
+**Why here.** The database revision and peer-visible document represent validated committed state.
+
+**Tradeoffs.** A single SQLite transaction path serializes this update boundary; rejected updates require clients to recover from server state.
+
+**Code and ownership.** [`validateDocument`](apps/notebook-server/src/server.mjs#L75), update handler in [`createNotebookServer`](apps/notebook-server/src/server.mjs#L147), extension.
+
+</details>
+
+<a id="technique-indexeddb-append-journal"></a>
+
+<details>
+<summary>IndexedDB append journal</summary>
+
+**Mechanism.** `NotebookPersistence` appends each local Yjs update to an IndexedDB object store, replays stored updates on load, and applies them within a Yjs transaction. The journal retains CRDT deletion history across reloads.
+
+**Example.** On startup, the store reads queued updates and applies each before syncing resumes.
+
+**Why here.** Edits made offline survive a reload and can merge when connectivity returns.
+
+**Tradeoffs.** Storage quota or browser denial surfaces as an error; accumulated journal growth must be managed by the existing lifecycle.
+
+**Code and ownership.** [`NotebookPersistence`](apps/playground/src/notebook/persistence.ts#L3), mixed (IndexedDB platform API and Yjs dependency).
+
+</details>
+
+<a id="technique-acknowledgement-tracking-and-stale-response-fencing"></a>
+
+<details>
+<summary>Acknowledgement tracking and stale-response fencing</summary>
+
+**Mechanism.** The client identifies outgoing updates and tracks their acknowledgements across reconnect; socket/session identity guards message handlers so responses from a replaced connection are ignored. The hook also increments an operation generation to disregard late create/join results after room changes.
+
+**Example.** A delayed presence message from a closed socket cannot overwrite the new connection's session list.
+
+**Why here.** Reconnect and room switching must preserve unsynced edits without allowing older responses to corrupt current state.
+
+**Tradeoffs.** Acknowledgement is protocol state, not proof that every browser has rendered the update; network loss still requires reconnect and merge.
+
+**Code and ownership.** [`NotebookClient`](apps/playground/src/notebook/client.ts#L19), [`useNotebook`](apps/playground/src/notebook/useNotebook.ts#L31), extension.
+
+</details>
+
+<a id="technique-semantic-level-of-detail"></a>
+
+<details>
+<summary>Semantic levels of detail</summary>
+
+**Mechanism.** Context views choose a token or thumbnail from activity and nested-path relationships. Working views default to full detail and retain user-selected token, thumbnail, or full levels by stable view ID; pins join the automatically selected working set. Previews cap displayed items, edges, rows, and columns. A session change resets pins and selected levels.
+
+**Example.** An illustrative long sequence displays at most 12 cells as a thumbnail; choosing Full opens its structural projection. A pinned value that leaves scope retains an explicit missing-value card.
+
+**Why here.** Compact context and detailed working views let readers follow active values without expanding every structure.
+
+**Tradeoffs.** Summaries hide values. Graph thumbnails still calculate the topology layout before slicing displayed points, so fewer rendered marks do not imply bounded layout cost. Pins can grow the working set. This is semantic detail selection, not continuous zoom or list virtualization.
+
+**Code and ownership.** [`AttentionWorkspace`](packages/react/src/AttentionWorkspace.tsx#L54), [`ProjectionPreview`](packages/react/src/ProjectionPreview.tsx#L41), and [`GraphThumbnail`](packages/react/src/ProjectionPreview.tsx#L20), extension.
 
 </details>
