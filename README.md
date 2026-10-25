@@ -2,6 +2,388 @@
 
 ## Architecture and execution guide
 
+<!-- execution-flow:start -->
+### Execution flow
+
+Start with the primary path, then expand a detailed workflow. Select a numbered node to see its operation, implementation techniques, and source. Solid arrows show the named control, data, or lifecycle handoff; dotted arrows show error paths. Separate entry points are named in each workflow.
+
+<a id="review-walkthrough"></a>
+
+#### Walk through one concrete example
+
+Run the Python snippet `values = [3, 1, 2]; values.sort(); print(values)` in the playground and inspect its trace.
+
+**Trace.** [Start a local Python run](#flow-step-playground-run) → [Validate limits and post request](#flow-step-adapter-request) → [Instrument Python and capture observations](#flow-step-instrument-capture) → [Normalize returned trace](#flow-step-adapter-normalize) → [Materialize execution timeline](#flow-step-timeline) → [Compile scene and graph layout](#flow-step-scene-layout) → [Plan identity-preserving scene motion](#flow-step-motion-plan) → [Render scene and selected detail](#flow-step-render-detail).
+
+**Result and boundary.** The playground displays a normalized execution trace as a scene with playback and selectable detail. Execution is bounded in a browser worker; this path does not imply replay export or notebook synchronization.
+
+<details>
+<summary>Implementation decisions to explain</summary>
+
+**Why instrument Python at the AST level instead of sampling only final values?** AST instrumentation captures semantic execution observations, while stable member IDs let the visualizer recognize values across snapshots. The tradeoff is added instrumentation and bounded trace collection; it is not a general Python debugger for arbitrary native extensions.
+
+[AST instrumentation](#technique-ast-instrumentation) · [Stable runtime identity](#technique-stable-runtime-identity).
+
+</details>
+
+#### Primary execution flow
+
+The Run action captures Python in a worker and renders trace states. Notebook synchronization has its own workflow and does not dispatch execution.
+
+```mermaid
+flowchart TD
+    n1["1. Start a local Python run"]
+    click n1 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-playground-run" "Open step, techniques, and source" _top
+    n2["2. Validate limits and post<br/>request"]
+    click n2 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-adapter-request" "Open step, techniques, and source" _top
+    n3["3. Load Pyodide and run harness"]
+    click n3 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-worker-runtime" "Open step, techniques, and source" _top
+    n4["4. Instrument Python and capture<br/>observations"]
+    click n4 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-instrument-capture" "Open step, techniques, and source" _top
+    n5["5. Normalize returned trace"]
+    click n5 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-adapter-normalize" "Open step, techniques, and source" _top
+    n6["6. Materialize execution<br/>timeline"]
+    click n6 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-timeline" "Open step, techniques, and source" _top
+    n7["7. Project structural values"]
+    click n7 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-projection" "Open step, techniques, and source" _top
+    n8["8. Compile scene and graph<br/>layout"]
+    click n8 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-scene-layout" "Open step, techniques, and source" _top
+    n9["9. Plan identity-preserving<br/>scene motion"]
+    click n9 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-motion-plan" "Open step, techniques, and source" _top
+    n10["10. Derive attention snapshots"]
+    click n10 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-attention-timeline" "Open step, techniques, and source" _top
+    n11["11. Render scene and selected<br/>detail"]
+    click n11 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-render-detail" "Open step, techniques, and source" _top
+    n12["12. Save or validate replay"]
+    click n12 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-replay-save-open" "Open step, techniques, and source" _top
+    n1 -->|"explicit Run invokes adapter"| n2
+    n2 -->|"postMessage request"| n3
+    n3 -->|"runHarness after runtime load"| n4
+    n4 -->|"success trace response"| n5
+    n5 -->|"normalized trace selected by playback<br/>position"| n6
+    n6 -->|"selected execution state"| n7
+    n7 -->|"projected variables and relations"| n8
+    n8 -->|"scene graph topology"| n9
+    n6 -->|"execution timeline input"| n10
+    n9 -->|"compiled transitions rendered"| n11
+    n10 -->|"workspace selects preview detail"| n11
+    n11 -->|"user may export or import replay"| n12
+```
+
+**Detailed workflows.** [Run Python and render a trace](#flow-workflow-python-trace-render) · [Synchronize and retain notebook edits](#flow-workflow-notebook-sync).
+
+<a id="flow-workflow-python-trace-render"></a>
+
+<details>
+<summary>Run Python and render a trace</summary>
+
+The explicit Run action invokes a browser worker. This path ends in the React visualizer; replay import and export remain user-triggered operations.
+
+```mermaid
+flowchart TD
+    n1["1. Start a local Python run"]
+    click n1 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-playground-run" "Open step, techniques, and source" _top
+    n2["2. Validate limits and post<br/>request"]
+    click n2 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-adapter-request" "Open step, techniques, and source" _top
+    n3["3. Load Pyodide and run harness"]
+    click n3 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-worker-runtime" "Open step, techniques, and source" _top
+    n4["4. Instrument Python and capture<br/>observations"]
+    click n4 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-instrument-capture" "Open step, techniques, and source" _top
+    n5["5. Normalize returned trace"]
+    click n5 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-adapter-normalize" "Open step, techniques, and source" _top
+    n6["6. Materialize execution<br/>timeline"]
+    click n6 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-timeline" "Open step, techniques, and source" _top
+    n7["7. Project structural values"]
+    click n7 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-projection" "Open step, techniques, and source" _top
+    n8["8. Compile scene and graph<br/>layout"]
+    click n8 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-scene-layout" "Open step, techniques, and source" _top
+    n9["9. Plan identity-preserving<br/>scene motion"]
+    click n9 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-motion-plan" "Open step, techniques, and source" _top
+    n10["10. Derive attention snapshots"]
+    click n10 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-attention-timeline" "Open step, techniques, and source" _top
+    n11["11. Render scene and selected<br/>detail"]
+    click n11 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-render-detail" "Open step, techniques, and source" _top
+    n12["12. Save or validate replay"]
+    click n12 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-replay-save-open" "Open step, techniques, and source" _top
+    n1 -->|"explicit Run invokes adapter"| n2
+    n2 -->|"postMessage request"| n3
+    n3 -->|"runHarness after runtime load"| n4
+    n4 -->|"success trace response"| n5
+    n5 -->|"normalized trace selected by playback<br/>position"| n6
+    n6 -->|"selected execution state"| n7
+    n7 -->|"projected variables and relations"| n8
+    n8 -->|"scene graph topology"| n9
+    n6 -->|"execution timeline input"| n10
+    n9 -->|"compiled transitions rendered"| n11
+    n10 -->|"workspace selects preview detail"| n11
+    n11 -->|"user may export or import replay"| n12
+```
+
+</details>
+
+<a id="flow-workflow-notebook-sync"></a>
+
+<details>
+<summary>Synchronize and retain notebook edits</summary>
+
+Notebook Yjs sync is separate from Python execution. The browser keeps an IndexedDB draft while a capability-authenticated WebSocket exchanges document state with the service.
+
+```mermaid
+flowchart TD
+    n13["13. Open local notebook draft"]
+    click n13 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-notebook-start" "Open step, techniques, and source" _top
+    n14["14. Merge document edits and<br/>anchor comments"]
+    click n14 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-document-edit" "Open step, techniques, and source" _top
+    n15["15. Append local updates to<br/>IndexedDB"]
+    click n15 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-persist-local" "Open step, techniques, and source" _top
+    n16["16. Authenticate notebook<br/>capability"]
+    click n16 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-client-auth" "Open step, techniques, and source" _top
+    n17["17. Validate merged candidate<br/>before commit"]
+    click n17 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-candidate-validate" "Open step, techniques, and source" _top
+    n18["18. Acknowledge update and<br/>publish peers"]
+    click n18 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-ack-broadcast" "Open step, techniques, and source" _top
+    n19["19. Apply server state and fence<br/>stale replies"]
+    click n19 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-client-reconcile" "Open step, techniques, and source" _top
+    n20["20. Retry or manually reconnect"]
+    click n20 href "https://github.com/STEVVVU/collaborative-code-editor#flow-step-reconnect" "Open step, techniques, and source" _top
+    n13 -->|"client exposes shared Yjs document"| n14
+    n13 -->|"document update journal"| n15
+    n13 -->|"open live WebSocket"| n16
+    n16 -->|"authenticated edit submits update"| n17
+    n17 -->|"candidate validates and changed state<br/>commits"| n18
+    n18 -->|"state acknowledgement or peer state<br/>message"| n19
+    n19 -->|"Yjs update remains journaled"| n15
+    n16 -->|"socket closes without protocol error"| n20
+    n20 -->|"retry or manual reconnect opens a new<br/>socket"| n16
+```
+
+</details>
+
+#### Steps, techniques, and source
+
+These source traces cover the active scope below. They explain implementation behavior; benchmark results and their limits remain in the measurement sections.
+
+<a id="flow-step-playground-run"></a>
+
+##### 1. Start a local Python run
+
+**Component.** apps/playground/src/App.tsx execute. The Run action captures the current source and run specification, advances an execution version, and asks the debugger adapter to execute in the browser. A source edit invalidates the prior result so an older completion cannot replace it.
+
+UI event dispatch and stale-result fencing are ordinary application control flow.
+
+**Source.** [`apps/playground/src/App.tsx:297`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/App.tsx#L297). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-adapter-request"></a>
+
+##### 2. Validate limits and post request
+
+**Component.** PyodideDebuggerAdapter.executeRun. The adapter validates positive frame and memory limits, assigns a request ID, tracks a timeout, and posts source, run mode, frame budget, and memory limit to a dedicated module worker. Startup, execution, and visualization have separate timeout windows.
+
+**Techniques at this step.** [Isolated worker execution and cancellation](#technique-isolated-worker-execution-and-cancellation) · [Execution resource bounds](#technique-execution-resource-bounds).
+
+**Source.** [`packages/python/src/pyodideDebuggerAdapter.ts:195`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/python/src/pyodideDebuggerAdapter.ts#L195). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-worker-runtime"></a>
+
+##### 3. Load Pyodide and run harness
+
+**Component.** python.worker.ts message handler. The worker lazily loads one Pyodide runtime, installs request values in Python globals, emits a tracing phase, runs the Python harness, then removes request globals. It returns either the trace or a failure message to the adapter.
+
+**Techniques at this step.** [Isolated worker execution and cancellation](#technique-isolated-worker-execution-and-cancellation).
+
+**Source.** [`packages/python/src/python.worker.ts:1750`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/python/src/python.worker.ts#L1750) · [`packages/python/src/python.worker.ts:1783`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/python/src/python.worker.ts#L1783). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-instrument-capture"></a>
+
+##### 4. Instrument Python and capture observations
+
+**Component.** python.worker.py Instrumenter and harness. The harness parses and instruments the submitted Python AST, executes under source tracing, and records frame and semantic observations. Stable member IDs preserve identity across snapshots; frame and memory budgets constrain collection, and exceptions return as failed worker responses.
+
+**Techniques at this step.** [AST instrumentation](#technique-ast-instrumentation) · [Stable runtime identity](#technique-stable-runtime-identity) · [Execution resource bounds](#technique-execution-resource-bounds).
+
+**Source.** [`packages/python/src/python.worker.ts:834`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/python/src/python.worker.ts#L834) · [`packages/python/src/python.worker.ts:114`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/python/src/python.worker.ts#L114) · [`packages/python/src/python.worker.ts:1457`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/python/src/python.worker.ts#L1457). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-adapter-normalize"></a>
+
+##### 5. Normalize returned trace
+
+**Component.** PyodideDebuggerAdapter.handleResponse. A failed response rejects the pending run. A successful response inherits persistent bindings, coalesces repeated frames, indexes semantic steps, expands them for playback, and upgrades the trace to the current IR version.
+
+**Techniques at this step.** [Frame coalescing](#technique-frame-coalescing) · [Versioned replay validation and upgrade](#technique-versioned-replay-validation-and-upgrade).
+
+**Source.** [`packages/python/src/pyodideDebuggerAdapter.ts:363`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/python/src/pyodideDebuggerAdapter.ts#L363) · [`packages/core/src/diff.ts:139`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/diff.ts#L139) · [`packages/core/src/traceUpgrade.ts:184`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/traceUpgrade.ts#L184). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-timeline"></a>
+
+##### 6. Materialize execution timeline
+
+**Component.** executionModel.ts materializeExecutionTimeline. Core walks debugger steps and frames, carries suspended activations and producer facts forward, and materializes execution state at each playback position. The timeline feeds the selected frame and attention derivation.
+
+**Techniques at this step.** [Execution timeline materialization](#technique-execution-timeline-materialization).
+
+**Source.** [`packages/core/src/executionModel.ts:416`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/executionModel.ts#L416). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-projection"></a>
+
+##### 7. Project structural values
+
+**Component.** scene.ts projectStructural. The projection registry resolves values and explicit graph contracts, then projects values into structural scene data. Relation graphs derive links from stable object identities; unsupported or invalid graph contracts do not become inferred adjacency semantics.
+
+**Techniques at this step.** [Contracted structural projection](#technique-contracted-structural-projection) · [Identity-derived relation graphs](#technique-identity-derived-relation-graphs).
+
+**Source.** [`packages/core/src/scene.ts:747`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/scene.ts#L747) · [`packages/core/src/scene.ts:2244`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/scene.ts#L2244). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-scene-layout"></a>
+
+##### 8. Compile scene and graph layout
+
+**Component.** scene.ts compileScene and topologyLayout.ts layoutRelationGraph. The selected execution state and projections compile into scene variables and relations. Contracted relation graphs use topology-aware layout to place vertices and edges for rendering.
+
+**Techniques at this step.** [Topology-aware layout](#technique-topology-aware-layout).
+
+**Source.** [`packages/core/src/scene.ts:2475`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/scene.ts#L2475) · [`packages/core/src/topologyLayout.ts:185`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/topologyLayout.ts#L185). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-motion-plan"></a>
+
+##### 9. Plan identity-preserving scene motion
+
+**Component.** motion.ts compileMotionPlan. The renderer compares entities by identity and produces transitions for retained, entered, and removed entities. Graph topology transitions add collision-aware routing when relation graph structure changes.
+
+**Techniques at this step.** [Identity-based motion planning](#technique-identity-based-motion-planning) · [Collision-aware topology transitions](#technique-collision-aware-topology-transitions).
+
+**Source.** [`packages/core/src/motion.ts:17`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/motion.ts#L17) · [`packages/core/src/topologyMotion.ts:145`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/topologyMotion.ts#L145). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-attention-timeline"></a>
+
+##### 10. Derive attention snapshots
+
+**Component.** attention.ts compileAttentionTimeline. Core derives attention views from execution states, including changes, semantic events, and paths into nested projections. The React workspace combines automatic working views with user pins.
+
+**Techniques at this step.** [Derived attention timeline](#technique-derived-attention-timeline).
+
+**Source.** [`packages/core/src/attention.ts:286`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/attention.ts#L286) · [`packages/react/src/AttentionWorkspace.tsx:54`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/react/src/AttentionWorkspace.tsx#L54). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-render-detail"></a>
+
+##### 11. Render scene and selected detail
+
+**Component.** VisualizerContent. The visualizer renders compiled scene state and motion, with playback controls and selectable nested projections. Attention previews choose token, thumbnail, or full detail based on the selected level.
+
+**Techniques at this step.** [Semantic levels of detail](#technique-semantic-level-of-detail).
+
+**Source.** [`packages/react/src/Visualizer.tsx:319`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/react/src/Visualizer.tsx#L319) · [`packages/react/src/ProjectionPreview.tsx:41`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/react/src/ProjectionPreview.tsx#L41). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-replay-save-open"></a>
+
+##### 12. Save or validate replay
+
+**Component.** replay.ts serializeReplay and parseReplay. The playground can serialize a completed trace to a versioned replay file. On import, the parser checks format, version, trace values, and execution metadata before upgrading the trace; invalid input throws rather than entering playback.
+
+**Techniques at this step.** [Versioned replay validation and upgrade](#technique-versioned-replay-validation-and-upgrade).
+
+**Source.** [`packages/core/src/replay.ts:626`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/replay.ts#L626) · [`packages/core/src/replay.ts:622`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/packages/core/src/replay.ts#L622). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-notebook-start"></a>
+
+##### 13. Open local notebook draft
+
+**Component.** NotebookClient.start. The client hashes the capability token to scope IndexedDB storage, restores cached role and revision metadata, attaches a Yjs update listener, then opens a live socket. Storage failure publishes an error and prevents connection startup.
+
+**Techniques at this step.** [IndexedDB append journal](#technique-indexeddb-append-journal) · [Acknowledgement tracking and stale-response fencing](#technique-acknowledgement-tracking-and-stale-response-fencing).
+
+**Source.** [`apps/playground/src/notebook/client.ts:50`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/client.ts#L50) · [`apps/playground/src/notebook/persistence.ts:3`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/persistence.ts#L3). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-document-edit"></a>
+
+##### 14. Merge document edits and anchor comments
+
+**Component.** Yjs notebook document. Yjs merges document updates. An annotation stores relative start and end positions so it can resolve against later source edits; the service validates these positions when it accepts a candidate document.
+
+**Techniques at this step.** [Yjs CRDT merge with relative comment anchors](#technique-yjs-crdt-merge-with-relative-comment-anchors).
+
+**Source.** [`apps/playground/src/notebook/document.ts:54`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/document.ts#L54) · [`apps/playground/src/notebook/document.ts:86`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/document.ts#L86). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-persist-local"></a>
+
+##### 15. Append local updates to IndexedDB
+
+**Component.** NotebookPersistence.storeUpdate. Local Yjs updates append to the IndexedDB update journal; opening storage replays the journal into the document before the client connects. Storage errors are surfaced to the client while the tab remains open.
+
+**Techniques at this step.** [IndexedDB append journal](#technique-indexeddb-append-journal).
+
+**Source.** [`apps/playground/src/notebook/persistence.ts:97`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/persistence.ts#L97) · [`apps/playground/src/notebook/persistence.ts:21`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/persistence.ts#L21). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-client-auth"></a>
+
+##### 16. Authenticate notebook capability
+
+**Component.** server.mjs roleFor and WebSocket connection. The server checks the token length, hashes it, and compares it with stored edit and view hashes using timing-safe equality. A socket that does not authenticate within five seconds is sent an error and closed.
+
+**Techniques at this step.** [Capability hashing and role authorization](#technique-capability-hashing-and-role-authorization).
+
+**Source.** [`apps/notebook-server/src/server.mjs:124`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/notebook-server/src/server.mjs#L124) · [`apps/notebook-server/src/server.mjs:306`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/notebook-server/src/server.mjs#L306). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-candidate-validate"></a>
+
+##### 17. Validate merged candidate before commit
+
+**Component.** server.mjs WebSocket update handler. For an edit-role update, the server merges incoming Yjs state with stored state in a temporary document and validates schema, field limits, contracts, annotations, relative positions, and encoded document size. It persists a changed candidate and advances revision only after validation succeeds.
+
+**Techniques at this step.** [Validate candidates before transaction and broadcast](#technique-validate-candidates-before-transaction-and-broadcast).
+
+**Source.** [`apps/notebook-server/src/server.mjs:75`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/notebook-server/src/server.mjs#L75) · [`apps/notebook-server/src/server.mjs:322`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/notebook-server/src/server.mjs#L322). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-ack-broadcast"></a>
+
+##### 18. Acknowledge update and publish peers
+
+**Component.** server.mjs WebSocket update handler. The server acknowledges the sender with its update ID and committed revision, then sends changed state to other room peers. A view-role client cannot submit updates; invalid candidates return an error without a commit or broadcast.
+
+**Techniques at this step.** [Validate candidates before transaction and broadcast](#technique-validate-candidates-before-transaction-and-broadcast).
+
+**Source.** [`apps/notebook-server/src/server.mjs:322`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/notebook-server/src/server.mjs#L322). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-client-reconcile"></a>
+
+##### 19. Apply server state and fence stale replies
+
+**Component.** NotebookClient socket message handler. The client ignores messages from replaced sockets, applies valid server Yjs state with origin server, records role and revision, and clears a matching acknowledgement ID. Invalid responses close the socket while retaining the local draft.
+
+**Techniques at this step.** [Acknowledgement tracking and stale-response fencing](#technique-acknowledgement-tracking-and-stale-response-fencing) · [Yjs CRDT merge with relative comment anchors](#technique-yjs-crdt-merge-with-relative-comment-anchors).
+
+**Source.** [`apps/playground/src/notebook/client.ts:163`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/client.ts#L163). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-reconnect"></a>
+
+##### 20. Retry or manually reconnect
+
+**Component.** NotebookClient reconnect and onclose. A non-error socket close publishes offline state and schedules a retry after two seconds. Manual reconnect closes the old socket and either reinitializes failed storage or opens a new socket; disposal cancels the retry and closes resources.
+
+**Techniques at this step.** [Acknowledgement tracking and stale-response fencing](#technique-acknowledgement-tracking-and-stale-response-fencing) · [IndexedDB append journal](#technique-indexeddb-append-journal).
+
+**Source.** [`apps/playground/src/notebook/client.ts:241`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/client.ts#L241) · [`apps/playground/src/notebook/client.ts:261`](https://github.com/STEVVVU/collaborative-code-editor/blob/main/apps/playground/src/notebook/client.ts#L261). [Back to execution flow](#execution-flow).
+
+<details>
+<summary>Scope and subsystem coverage</summary>
+
+Active Python worker execution and observation, trace normalization/replay, projection and scene rendering, identity motion, attention, plus notebook client, capability authorization, server persistence, IndexedDB draft, and reconnect lifecycle.
+
+- **Trace normalization and replay.** Worker results are coalesced and upgraded before materialized playback state; replay import validates versioned data. [Step 5](#flow-step-adapter-normalize), [Step 6](#flow-step-timeline), [Step 12](#flow-step-replay-save-open).
+- **Python observation and worker execution.** Adapter request bounds, worker lifecycle, AST observation, stable identity, and resource limits are represented. [Step 2](#flow-step-adapter-request), [Step 3](#flow-step-worker-runtime), [Step 4](#flow-step-instrument-capture), [Step 5](#flow-step-adapter-normalize).
+- **Structural projection and scene compilation.** Contract resolution and identity-derived relations feed scene compilation. [Step 7](#flow-step-projection), [Step 8](#flow-step-scene-layout).
+- **Graph layout and identity motion.** Relation graph layout feeds identity motion and topology-aware transitions rendered by React. [Step 8](#flow-step-scene-layout), [Step 9](#flow-step-motion-plan), [Step 11](#flow-step-render-detail).
+- **Attention workspace.** Core derives attention snapshots; React applies selected semantic detail levels to nested previews. [Step 10](#flow-step-attention-timeline), [Step 11](#flow-step-render-detail).
+- **Notebook document and comments.** Yjs merges updates and relative positions keep annotation ranges tied to edited source. [Step 14](#flow-step-document-edit), [Step 19](#flow-step-client-reconcile).
+- **Notebook authorization and server persistence.** Role checks precede update validation; the server persists validated changed state before acknowledgement and peer delivery. [Step 16](#flow-step-client-auth), [Step 17](#flow-step-candidate-validate), [Step 18](#flow-step-ack-broadcast).
+- **Notebook offline/reconnect lifecycle.** Capability-scoped IndexedDB replay precedes connection; updates are journaled and reconnect retries retain the local Yjs document. [Step 13](#flow-step-notebook-start), [Step 15](#flow-step-persist-local), [Step 19](#flow-step-client-reconcile), [Step 20](#flow-step-reconnect).
+
+</details>
+
+<!-- execution-flow:end -->
+
+<details>
+<summary>Subsystem technique index</summary>
+
 ### Subsystem map
 
 Select a subsystem in the diagram to open its techniques, tradeoffs, and code references. The numbered links provide the same navigation. This map groups components; the execution diagrams show their runtime flow.
@@ -39,6 +421,8 @@ flowchart LR
 Traceframe implements a language-neutral trace model, a Python adapter, projection and replay packages, and a React renderer. The playground and notebook service are applications built on those packages. Pyodide, React, Monaco, Yjs, and SQLite are dependencies rather than Traceframe-owned engines. A [Trace IR](#trace-ir) captures execution facts; a [projection contract](#projection-contract) selects an intentional view.
 
 The worker returns observations, core turns them into scenes, and React presents the trace. Notebook synchronization is separate and never starts execution.
+
+</details>
 
 <details>
 <summary>Expand flow diagram 1</summary>
